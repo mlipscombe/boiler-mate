@@ -41,11 +41,11 @@ func lookupEnvOrString(key string, defaultVal string) string {
 func main() {
 	var debugMode bool
 	var mqttUrlOpt string
-	var host string
+	var controllerUrlOpt string
 
 	flag.BoolVar(&debugMode, "debug", false, "debug mode")
-	flag.StringVar(&host, "host", lookupEnvOrString("NBEMQTT_HOST", "tcp://00000:0123456789@192.168.22.171:8483"), "controller URI, in the format tcp://<serial>:<password>@<host>:<port>")
-	flag.StringVar(&mqttUrlOpt, "mqtt", lookupEnvOrString("NBEMQTT_MQTT", "mqtt"), "MQTT URI, in the format tcp://<user>:<password>@<host>:<port>/<prefix>")
+	flag.StringVar(&controllerUrlOpt, "controller", lookupEnvOrString("NBEMQTT_CONTROLLER", "tcp://00000:0123456789@192.168.1.100:8483"), "controller URI, in the format tcp://<serial>:<password>@<host>:<port>")
+	flag.StringVar(&mqttUrlOpt, "mqtt", lookupEnvOrString("NBEMQTT_MQTT", "tcp://localhost:1883"), "MQTT URI, in the format tcp://[<user>:<password>]@<host>:<port>[/<prefix>]")
 	flag.Parse()
 
 	log.SetFormatter(&log.TextFormatter{})
@@ -55,7 +55,7 @@ func main() {
 		log.SetLevel(log.InfoLevel)
 	}
 
-	uri, err := url.Parse(host)
+	uri, err := url.Parse(controllerUrlOpt)
 	if err != nil {
 		panic(err)
 	}
