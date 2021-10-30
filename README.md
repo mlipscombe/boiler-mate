@@ -32,7 +32,10 @@ Synopsis:
     Usage of boiler-mate:
         -debug
             debug mode
-        -host string
+        -metrics string
+            address to bind for prometheus metrics endpoint (default localhost:2112),
+            or "false" to disable (default "localhost:2112")
+        -controller string
             controller URI, in the format tcp://<serial>:<password>@<host>:<port>
         -mqtt string
             MQTT URI, in the format tcp://[<user>:<password>]@<host>:<port>[/<prefix>]
@@ -44,6 +47,10 @@ Example:
 ```
     boiler-mate --host udp://3629:0587451614@192.168.1.100:8483 --mqtt tcp://10.10.11.20:1883
 ```
+
+Each command-line option can also be specified by an equivilent environment
+variable, prefixed with `BOILER_MATE_`. For example, to set the MQTT URI to
+`tcp://mqtt:1833`, you can set the environment variable `BOILER_MATE_MQTT=tcp://mqtt:1833`.
 
 The boiler's password is required to write settings, but not to read them. You can
 find controller's serial number and password in the top right corner of the display

@@ -20,6 +20,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -28,6 +29,7 @@ import (
 	cmp "github.com/google/go-cmp/cmp"
 	"github.com/mlipscombe/boiler-mate/mqtt"
 	"github.com/mlipscombe/boiler-mate/nbe"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -40,12 +42,15 @@ func lookupEnvOrString(key string, defaultVal string) string {
 
 func main() {
 	var debugMode bool
+	var metricsListen string
 	var mqttUrlOpt string
 	var controllerUrlOpt string
 
 	flag.BoolVar(&debugMode, "debug", false, "debug mode")
-	flag.StringVar(&controllerUrlOpt, "controller", lookupEnvOrString("NBEMQTT_CONTROLLER", "tcp://00000:0123456789@192.168.1.100:8483"), "controller URI, in the format tcp://<serial>:<password>@<host>:<port>")
-	flag.StringVar(&mqttUrlOpt, "mqtt", lookupEnvOrString("NBEMQTT_MQTT", "tcp://localhost:1883"), "MQTT URI, in the format tcp://[<user>:<password>]@<host>:<port>[/<prefix>]")
+	flag.StringVar(&metricsListen, "metrics", lookupEnvOrString("BOILER_MATE_METRICS", "localhost:2112"), "address to bind for prometheus metrics endpoint (default localhost:2112), or \"false\" to disable")
+	flag.StringVar(&controllerUrlOpt, "controller", lookupEnvOrString("BOILER_MATE_CONTROLLER", "tcp://00000:0123456789@192.168.1.100:8483"), "controller URI, in the format tcp://<serial>:<password>@<host>:<port>")
+	flag.StringVar(&mqttUrlOpt, "mqtt", lookupEnvOrString("BOILER_MATE_MQTT", "tcp://localhost:1883"), "MQTT URI, in the format tcp://[<user>:<password>]@<host>:<port>[/<prefix>]")
+
 	flag.Parse()
 
 	log.SetFormatter(&log.TextFormatter{})
@@ -53,6 +58,14 @@ func main() {
 		log.SetLevel(log.DebugLevel)
 	} else {
 		log.SetLevel(log.InfoLevel)
+	}
+
+	if metricsListen != "false" {
+		go func(listenAddress string) {
+			log.Infof("Starting metrics server on %s\n", listenAddress)
+			http.Handle("/metrics", promhttp.Handler())
+			http.ListenAndServe(metricsListen, nil)
+		}(metricsListen)
 	}
 
 	uri, err := url.Parse(controllerUrlOpt)
@@ -69,7 +82,7 @@ func main() {
 
 	mqttUrl, err := url.Parse(mqttUrlOpt)
 	if err != nil {
-		log.Errorf("Invalid MQTT URL: %s\n", mqttUrlOpt)
+		log.Fatalf("Invalid MQTT URL: %s\n", mqttUrlOpt)
 		os.Exit(1)
 	}
 
@@ -159,5 +172,6 @@ func main() {
 	err = <-doneChan
 	if err != nil {
 		log.Fatal(err)
+		os.Exit(1)
 	}
 }
