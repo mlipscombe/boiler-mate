@@ -38,7 +38,7 @@ type Message mqtt.Message
 
 type MessageHandler func(client *Client, message Message)
 
-func NewClient(uri *url.URL, client_id string, prefix string) (Client, error) {
+func NewClient(uri *url.URL, client_id string, prefix string) (*Client, error) {
 	client := Client{
 		URI:      uri,
 		ClientID: client_id,
@@ -46,7 +46,7 @@ func NewClient(uri *url.URL, client_id string, prefix string) (Client, error) {
 	}
 	opts := createClientOptions(client.URI, client.ClientID)
 	err := client.connect(opts)
-	return client, err
+	return &client, err
 }
 
 func (client *Client) connect(opts *mqtt.ClientOptions) error {

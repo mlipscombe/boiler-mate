@@ -44,12 +44,12 @@ func lookupEnvOrString(key string, defaultVal string) string {
 }
 
 func main() {
-	var debugMode bool
+	var logLevel string
 	var bind string
 	var mqttUrlOpt string
 	var controllerUrlOpt string
 
-	flag.BoolVar(&debugMode, "debug", false, "debug mode")
+	flag.StringVar(&logLevel, "log-level", lookupEnvOrString("BOILER_MATE_LOG_LEVEL", "INFO"), "logging level")
 	flag.StringVar(&bind, "bind", lookupEnvOrString("BOILER_MATE_BIND", "localhost:2112"), "address to bind for healthz and prometheus metrics endpoints (default localhost:2112), or \"false\" to disable")
 	flag.StringVar(&controllerUrlOpt, "controller", lookupEnvOrString("BOILER_MATE_CONTROLLER", "tcp://00000:0123456789@192.168.1.100:8483"), "controller URI, in the format tcp://<serial>:<password>@<host>:<port>")
 	flag.StringVar(&mqttUrlOpt, "mqtt", lookupEnvOrString("BOILER_MATE_MQTT", "tcp://localhost:1883"), "MQTT URI, in the format tcp://[<user>:<password>]@<host>:<port>[/<prefix>]")
@@ -57,11 +57,11 @@ func main() {
 	flag.Parse()
 
 	log.SetFormatter(&log.TextFormatter{})
-	if debugMode {
-		log.SetLevel(log.DebugLevel)
-	} else {
-		log.SetLevel(log.InfoLevel)
+	ll, err := log.ParseLevel(logLevel)
+	if err != nil {
+		ll = log.InfoLevel
 	}
+	log.SetLevel(ll)
 
 	if bind != "false" {
 		go func(listenAddress string) {
@@ -128,34 +128,35 @@ func main() {
 
 	for _, category := range nbe.Settings {
 		categoryCache := make(map[string]interface{})
-		categoryGauges := make(map[string]prometheus.Gauge)
+		categoryGauges := make(map[string]*prometheus.GaugeVec)
 		settings[category] = &categoryCache
 		settingsGauges[category] = &categoryGauges
 
-		go func(prefix string, cache *map[string]interface{}, gauges *map[string]prometheus.Gauge) {
+		go func(prefix string, cache *map[string]interface{}, gauges *map[string]*prometheus.GaugeVec) {
 			for {
 				boiler.GetAsync(nbe.GetSetupFunction, fmt.Sprintf("%s.*", prefix), func(response *nbe.NBEResponse) {
 					changeSet := make(map[string]interface{})
 					for k, m := range response.Payload {
 						dataType := reflect.TypeOf(m).Kind()
 						if (*gauges)[k] == nil && (dataType == reflect.Float64 || dataType == reflect.Int64) {
-							(*gauges)[k] = prometheus.NewGauge(
+							(*gauges)[k] = prometheus.NewGaugeVec(
 								prometheus.GaugeOpts{
 									Namespace: "boiler_mate",
 									Subsystem: prefix,
 									Name:      k,
 								},
+								[]string{"serial"},
 							)
-							prometheus.MustRegister((*gauges)[k])
+							prometheus.Register((*gauges)[k])
 						}
 						if !cmp.Equal((*cache)[k], m) {
 							changeSet[k] = m
 							(*cache)[k] = m
 							switch t := m.(type) {
 							case nbe.RoundedFloat:
-								(*gauges)[k].Set(float64(t))
+								(*gauges)[k].WithLabelValues(boiler.Serial).Set(float64(t))
 							case int64:
-								(*gauges)[k].Set(float64(t))
+								(*gauges)[k].WithLabelValues(boiler.Serial).Set(float64(t))
 							}
 						}
 					}
@@ -167,20 +168,21 @@ func main() {
 	}
 
 	operatingData := make(map[string]interface{})
-	operatingGauges := make(map[string]prometheus.Gauge)
-	go func(cache *map[string]interface{}, gauges *map[string]prometheus.Gauge) {
+	operatingGauges := make(map[string]*prometheus.GaugeVec)
+	go func(cache *map[string]interface{}, gauges *map[string]*prometheus.GaugeVec) {
 		for {
 			boiler.GetAsync(nbe.GetOperatingDataFunction, "*", func(response *nbe.NBEResponse) {
 				changeSet := make(map[string]interface{})
 				for k, m := range response.Payload {
 					dataType := reflect.TypeOf(m).Kind()
 					if (*gauges)[k] == nil && (dataType == reflect.Float64 || dataType == reflect.Int64) {
-						(*gauges)[k] = prometheus.NewGauge(
+						(*gauges)[k] = prometheus.NewGaugeVec(
 							prometheus.GaugeOpts{
 								Namespace: "boiler_mate",
 								Subsystem: "operating_data",
 								Name:      k,
 							},
+							[]string{"serial"},
 						)
 						prometheus.MustRegister((*gauges)[k])
 					}
@@ -190,9 +192,9 @@ func main() {
 						(*cache)[k] = m
 						switch t := m.(type) {
 						case nbe.RoundedFloat:
-							(*gauges)[k].Set(float64(t))
+							(*gauges)[k].WithLabelValues(boiler.Serial).Set(float64(t))
 						case int64:
-							(*gauges)[k].Set(float64(t))
+							(*gauges)[k].WithLabelValues(boiler.Serial).Set(float64(t))
 						}
 					}
 				}
@@ -203,21 +205,21 @@ func main() {
 	}(&operatingData, &operatingGauges)
 
 	advancedData := make(map[string]interface{})
-	advancedGauges := make(map[string]prometheus.Gauge)
-
-	go func(cache *map[string]interface{}, gauges *map[string]prometheus.Gauge) {
+	advancedGauges := make(map[string]*prometheus.GaugeVec)
+	go func(cache *map[string]interface{}, gauges *map[string]*prometheus.GaugeVec) {
 		for {
 			boiler.GetAsync(nbe.GetAdvancedDataFunction, "*", func(response *nbe.NBEResponse) {
 				changeSet := make(map[string]interface{})
 				for k, m := range response.Payload {
 					dataType := reflect.TypeOf(m).Kind()
 					if (*gauges)[k] == nil && (dataType == reflect.Float64 || dataType == reflect.Int64) {
-						(*gauges)[k] = prometheus.NewGauge(
+						(*gauges)[k] = prometheus.NewGaugeVec(
 							prometheus.GaugeOpts{
 								Namespace: "boiler_mate",
 								Subsystem: "operating_data",
 								Name:      k,
 							},
+							[]string{"serial"},
 						)
 						prometheus.MustRegister((*gauges)[k])
 					}
@@ -227,9 +229,9 @@ func main() {
 						(*cache)[k] = m
 						switch t := m.(type) {
 						case nbe.RoundedFloat:
-							(*gauges)[k].Set(float64(t))
+							(*gauges)[k].WithLabelValues(boiler.Serial).Set(float64(t))
 						case int64:
-							(*gauges)[k].Set(float64(t))
+							(*gauges)[k].WithLabelValues(boiler.Serial).Set(float64(t))
 						}
 					}
 				}
