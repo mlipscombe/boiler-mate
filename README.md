@@ -32,9 +32,9 @@ Synopsis:
     Usage of boiler-mate:
         -debug
             debug mode
-        -metrics string
-            address to bind for prometheus metrics endpoint (default localhost:2112),
-            or "false" to disable (default "localhost:2112")
+        -bind string
+            address to bind for healthz and prometheus metrics endpoint, or "false"
+            to disable (default "localhost:2112")
         -controller string
             controller URI, in the format tcp://<serial>:<password>@<host>:<port>
         -mqtt string

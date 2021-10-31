@@ -28,6 +28,7 @@ import (
 	"time"
 
 	cmp "github.com/google/go-cmp/cmp"
+	healthz "github.com/klyve/go-healthz"
 	"github.com/mlipscombe/boiler-mate/mqtt"
 	"github.com/mlipscombe/boiler-mate/nbe"
 	"github.com/prometheus/client_golang/prometheus"
@@ -44,12 +45,12 @@ func lookupEnvOrString(key string, defaultVal string) string {
 
 func main() {
 	var debugMode bool
-	var metricsListen string
+	var bind string
 	var mqttUrlOpt string
 	var controllerUrlOpt string
 
 	flag.BoolVar(&debugMode, "debug", false, "debug mode")
-	flag.StringVar(&metricsListen, "metrics", lookupEnvOrString("BOILER_MATE_METRICS", "localhost:2112"), "address to bind for prometheus metrics endpoint (default localhost:2112), or \"false\" to disable")
+	flag.StringVar(&bind, "bind", lookupEnvOrString("BOILER_MATE_BIND", "localhost:2112"), "address to bind for healthz and prometheus metrics endpoints (default localhost:2112), or \"false\" to disable")
 	flag.StringVar(&controllerUrlOpt, "controller", lookupEnvOrString("BOILER_MATE_CONTROLLER", "tcp://00000:0123456789@192.168.1.100:8483"), "controller URI, in the format tcp://<serial>:<password>@<host>:<port>")
 	flag.StringVar(&mqttUrlOpt, "mqtt", lookupEnvOrString("BOILER_MATE_MQTT", "tcp://localhost:1883"), "MQTT URI, in the format tcp://[<user>:<password>]@<host>:<port>[/<prefix>]")
 
@@ -62,12 +63,20 @@ func main() {
 		log.SetLevel(log.InfoLevel)
 	}
 
-	if metricsListen != "false" {
+	if bind != "false" {
 		go func(listenAddress string) {
 			log.Infof("Starting metrics server on %s\n", listenAddress)
+			instance := healthz.Instance{
+				Logger:   log.New(),
+				Detailed: true,
+			}
+
 			http.Handle("/metrics", promhttp.Handler())
-			http.ListenAndServe(metricsListen, nil)
-		}(metricsListen)
+			http.Handle("/healthz", instance.Healthz())
+			http.Handle("/liveness", instance.Liveness())
+
+			http.ListenAndServe(bind, nil)
+		}(bind)
 	}
 
 	uri, err := url.Parse(controllerUrlOpt)
