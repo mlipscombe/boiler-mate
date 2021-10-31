@@ -1,22 +1,18 @@
 FROM golang:1.17-alpine AS build
 
-RUN adduser -u 10001 -D -H scratchuser
-
 WORKDIR /app
 
 COPY . .
+
+ENV CGO_ENABLED 0
 RUN go mod download
 RUN go build -o /boiler-mate
 
 FROM scratch
-
 WORKDIR /
-
-COPY --from=build /boiler-mate /boiler-mate
-COPY --from=build /etc/passwd /etc/passwd
-
+COPY --from=build /boiler-mate ./
 EXPOSE 2112
-USER scratchuser:scratchuser
+USER 10001:10001
 
 ENV BOILER_MATE_METRICS "0.0.0.0:2112"
 
