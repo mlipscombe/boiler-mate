@@ -65,7 +65,7 @@ func main() {
 
 	if bind != "false" {
 		go func(listenAddress string) {
-			log.Infof("Starting metrics server on %s\n", listenAddress)
+			log.Infof("Starting metrics server on %s", listenAddress)
 			instance := healthz.Instance{
 				Logger:   log.New(),
 				Detailed: true,
@@ -89,11 +89,11 @@ func main() {
 	}
 
 	doneChan := make(chan error, 1)
-	log.Infof("Connected to boiler at %s (serial: %s)\n", uri.Host, boiler.Serial)
+	log.Infof("Connected to boiler at %s (serial: %s)", uri.Host, boiler.Serial)
 
 	mqttUrl, err := url.Parse(mqttUrlOpt)
 	if err != nil {
-		log.Fatalf("Invalid MQTT URL: %s\n", mqttUrlOpt)
+		log.Fatalf("Invalid MQTT URL: %s", mqttUrlOpt)
 		os.Exit(1)
 	}
 
@@ -107,11 +107,11 @@ func main() {
 	mqttClient, err := mqtt.NewClient(mqttUrl, fmt.Sprintf("nbemqtt-%s", boiler.Serial), mqttPrefix)
 
 	if err != nil {
-		log.Errorf("Failed to create MQTT client: %s\n", err)
+		log.Errorf("Failed to create MQTT client: %s", err)
 		os.Exit(1)
 	}
 
-	log.Infof("Connected to MQTT broker %s (publishing on \"%s\")\n", mqttUrl.Host, mqttPrefix)
+	log.Infof("Connected to MQTT broker %s (publishing on \"%s\")", mqttUrl.Host, mqttPrefix)
 
 	mqttClient.Subscribe("set/+/+", 1, func(client *mqtt.Client, msg mqtt.Message) {
 		topicParts := strings.Split(msg.Topic(), "/")
@@ -119,7 +119,7 @@ func main() {
 		value := msg.Payload()
 
 		boiler.SetAsync(key, value, func(response *nbe.NBEResponse) {
-			log.Infof("Set %s to %s: %v\n", key, value, response)
+			log.Infof("Set %s to %s: %v", key, value, response)
 		})
 	})
 
