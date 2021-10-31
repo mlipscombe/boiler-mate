@@ -23,12 +23,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
 	cmp "github.com/google/go-cmp/cmp"
 	"github.com/mlipscombe/boiler-mate/mqtt"
 	"github.com/mlipscombe/boiler-mate/nbe"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
 )
@@ -113,61 +115,120 @@ func main() {
 	})
 
 	settings := make(map[string]interface{})
+	settingsGauges := make(map[string]interface{})
 
 	for _, category := range nbe.Settings {
 		categoryCache := make(map[string]interface{})
+		categoryGauges := make(map[string]prometheus.Gauge)
 		settings[category] = &categoryCache
+		settingsGauges[category] = &categoryGauges
 
-		go func(prefix string, cache *map[string]interface{}) {
+		go func(prefix string, cache *map[string]interface{}, gauges *map[string]prometheus.Gauge) {
 			for {
 				boiler.GetAsync(nbe.GetSetupFunction, fmt.Sprintf("%s.*", prefix), func(response *nbe.NBEResponse) {
 					changeSet := make(map[string]interface{})
 					for k, m := range response.Payload {
+						dataType := reflect.TypeOf(m).Kind()
+						if (*gauges)[k] == nil && (dataType == reflect.Float64 || dataType == reflect.Int64) {
+							(*gauges)[k] = prometheus.NewGauge(
+								prometheus.GaugeOpts{
+									Namespace: "boiler_mate",
+									Subsystem: prefix,
+									Name:      k,
+								},
+							)
+							prometheus.MustRegister((*gauges)[k])
+						}
 						if !cmp.Equal((*cache)[k], m) {
 							changeSet[k] = m
 							(*cache)[k] = m
+							switch t := m.(type) {
+							case nbe.RoundedFloat:
+								(*gauges)[k].Set(float64(t))
+							case int64:
+								(*gauges)[k].Set(float64(t))
+							}
 						}
 					}
 					mqttClient.PublishMany(prefix, changeSet)
 				})
 				time.Sleep(10 * time.Second)
 			}
-		}(category, &categoryCache)
+		}(category, &categoryCache, &categoryGauges)
 	}
 
 	operatingData := make(map[string]interface{})
-	go func(cache *map[string]interface{}) {
+	operatingGauges := make(map[string]prometheus.Gauge)
+	go func(cache *map[string]interface{}, gauges *map[string]prometheus.Gauge) {
 		for {
 			boiler.GetAsync(nbe.GetOperatingDataFunction, "*", func(response *nbe.NBEResponse) {
 				changeSet := make(map[string]interface{})
 				for k, m := range response.Payload {
+					dataType := reflect.TypeOf(m).Kind()
+					if (*gauges)[k] == nil && (dataType == reflect.Float64 || dataType == reflect.Int64) {
+						(*gauges)[k] = prometheus.NewGauge(
+							prometheus.GaugeOpts{
+								Namespace: "boiler_mate",
+								Subsystem: "operating_data",
+								Name:      k,
+							},
+						)
+						prometheus.MustRegister((*gauges)[k])
+					}
+
 					if !cmp.Equal((*cache)[k], m) {
 						changeSet[k] = m
 						(*cache)[k] = m
+						switch t := m.(type) {
+						case nbe.RoundedFloat:
+							(*gauges)[k].Set(float64(t))
+						case int64:
+							(*gauges)[k].Set(float64(t))
+						}
 					}
 				}
 				go mqttClient.PublishMany("operating_data", changeSet)
 			})
 			time.Sleep(5 * time.Second)
 		}
-	}(&operatingData)
+	}(&operatingData, &operatingGauges)
 
 	advancedData := make(map[string]interface{})
-	go func(cache *map[string]interface{}) {
+	advancedGauges := make(map[string]prometheus.Gauge)
+
+	go func(cache *map[string]interface{}, gauges *map[string]prometheus.Gauge) {
 		for {
 			boiler.GetAsync(nbe.GetAdvancedDataFunction, "*", func(response *nbe.NBEResponse) {
 				changeSet := make(map[string]interface{})
 				for k, m := range response.Payload {
+					dataType := reflect.TypeOf(m).Kind()
+					if (*gauges)[k] == nil && (dataType == reflect.Float64 || dataType == reflect.Int64) {
+						(*gauges)[k] = prometheus.NewGauge(
+							prometheus.GaugeOpts{
+								Namespace: "boiler_mate",
+								Subsystem: "operating_data",
+								Name:      k,
+							},
+						)
+						prometheus.MustRegister((*gauges)[k])
+					}
+
 					if !cmp.Equal((*cache)[k], m) {
 						changeSet[k] = m
 						(*cache)[k] = m
+						switch t := m.(type) {
+						case nbe.RoundedFloat:
+							(*gauges)[k].Set(float64(t))
+						case int64:
+							(*gauges)[k].Set(float64(t))
+						}
 					}
 				}
 				go mqttClient.PublishMany("advanced_data", changeSet)
 			})
 			time.Sleep(5 * time.Second)
 		}
-	}(&advancedData)
+	}(&advancedData, &advancedGauges)
 
 	err = <-doneChan
 	if err != nil {
