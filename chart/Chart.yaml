@@ -1,0 +1,8 @@
+apiVersion: v2
+name: boiler-mate
+description: A Helm chart for boiler-mate
+
+type: application
+
+version: 0.9.1
+appVersion: "0.9.1"
