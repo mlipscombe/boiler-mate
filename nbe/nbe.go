@@ -1,6 +1,6 @@
 /*
  * This file is part of the boiler-mate distribution (https://github.com/mlipscombe/boiler-mate).
- * Copyright (c) 2021 Mark Lipscombe.
+ * Copyright (c) 2021-2023 Mark Lipscombe.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -51,6 +51,7 @@ type NBE struct {
 	AppID        string
 	ControllerID string
 	Serial       string
+	IPAddress    string
 	SeqNo        int8
 	PinCode      string
 	RSAKey       *rsa.PublicKey // rsa key
@@ -78,6 +79,7 @@ func NewNBE(uri *url.URL) (*NBE, error) {
 		AppID:        appID,
 		ControllerID: controllerID,
 		Serial:       uri.User.Username(),
+		IPAddress:    uri.Hostname(),
 		PinCode:      password,
 		SeqNo:        0,
 		Ready:        make(chan bool),
@@ -177,9 +179,8 @@ func (nbe *NBE) SendAsync(request *NBERequest, cb func(*NBEResponse)) (int8, err
 	if nbe.SeqNo > 99 {
 		nbe.SeqNo = 0
 	}
-	nbe.queueMutex.Unlock()
-
 	request.SeqNo = nbe.SeqNo
+	nbe.queueMutex.Unlock()
 
 	addr, err := net.ResolveUDPAddr("udp4", nbe.URI.Host)
 	if err != nil {

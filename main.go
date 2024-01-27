@@ -1,6 +1,6 @@
 /*
  * This file is part of the boiler-mate distribution (https://github.com/mlipscombe/boiler-mate).
- * Copyright (c) 2021 Mark Lipscombe.
+ * Copyright (c) 2021-2023 Mark Lipscombe.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -43,17 +43,28 @@ func lookupEnvOrString(key string, defaultVal string) string {
 	return defaultVal
 }
 
+func lookupEnvOrBool(key string, defaultVal bool) bool {
+	if val, ok := os.LookupEnv(key); ok {
+		if val == "true" || val == "1" || val == "yes" {
+			return true
+		}
+		return false
+	}
+	return defaultVal
+}
+
 func main() {
 	var logLevel string
 	var bind string
 	var mqttUrlOpt string
 	var controllerUrlOpt string
+	var haDiscovery bool
 
 	flag.StringVar(&logLevel, "log-level", lookupEnvOrString("BOILER_MATE_LOG_LEVEL", "INFO"), "logging level")
 	flag.StringVar(&bind, "bind", lookupEnvOrString("BOILER_MATE_BIND", "localhost:2112"), "address to bind for healthz and prometheus metrics endpoints (default localhost:2112), or \"false\" to disable")
 	flag.StringVar(&controllerUrlOpt, "controller", lookupEnvOrString("BOILER_MATE_CONTROLLER", "tcp://00000:0123456789@192.168.1.100:8483"), "controller URI, in the format tcp://<serial>:<password>@<host>:<port>")
 	flag.StringVar(&mqttUrlOpt, "mqtt", lookupEnvOrString("BOILER_MATE_MQTT", "tcp://localhost:1883"), "MQTT URI, in the format tcp://[<user>:<password>]@<host>:<port>[/<prefix>]")
-
+	flag.BoolVar(&haDiscovery, "homeassistant", lookupEnvOrBool("BOILER_MATE_HOMEASSISTANT", true), "enable Home Assistant autodiscovery (default: true)")
 	flag.Parse()
 
 	log.SetFormatter(&log.TextFormatter{})
@@ -118,9 +129,26 @@ func main() {
 		key := fmt.Sprintf("%s.%s", topicParts[len(topicParts)-2], topicParts[len(topicParts)-1])
 		value := msg.Payload()
 
+		if key == "device.power_switch" {
+			valueStr := string(value[:])
+			if valueStr == "ON" || valueStr == "1" {
+				key = "misc.start"
+				value = []byte("1")
+			} else {
+				key = "misc.stop"
+				value = []byte("1")
+			}
+		}
+
 		boiler.SetAsync(key, value, func(response *nbe.NBEResponse) {
 			log.Infof("Set %s to %s: %v", key, value, response)
 		})
+	})
+
+	go mqttClient.PublishMany("device", map[string]interface{}{
+		"status":     "online",
+		"serial":     boiler.Serial,
+		"ip_address": boiler.IPAddress,
 	})
 
 	settings := make(map[string]interface{})
@@ -196,10 +224,24 @@ func main() {
 						case int64:
 							(*gauges)[k].WithLabelValues(boiler.Serial).Set(float64(t))
 						}
+
+						if k == "state" {
+							curState, ok := m.(int64)
+							if ok {
+								changeSet["state_text"] = nbe.PowerStates[curState]
+								stateOn := "OFF"
+								if curState != 14 {
+									stateOn = "ON"
+								}
+								changeSet["state_on"] = stateOn
+							}
+						}
 					}
 				}
+
 				go mqttClient.PublishMany("operating_data", changeSet)
 			})
+
 			time.Sleep(5 * time.Second)
 		}
 	}(&operatingData, &operatingGauges)
@@ -241,7 +283,278 @@ func main() {
 		}
 	}(&advancedData, &advancedGauges)
 
+	if haDiscovery {
+		log.Infof("Publishing Home Assistant discovery messages for %s", boiler.Serial)
+
+		devBlock := map[string]interface{}{
+			"ids":  []string{fmt.Sprintf("nbe_%s", boiler.Serial)},
+			"name": fmt.Sprintf("NBE Boiler (%s)", boiler.Serial),
+			"sw":   "boiler-mate",
+			"mf":   "NBE",
+			"sa":   "",
+		}
+
+		go func(prefix string) {
+			time.Sleep(5 * time.Second)
+
+			sensors := make(map[string]interface{})
+			sensors["ip_address"] = map[string]interface{}{
+				"name":            "IP Address",
+				"entity_category": "diagnostic",
+				"stat_t":          fmt.Sprintf("%s/device/ip_address", prefix),
+				"avty_t":          fmt.Sprintf("%s/device/status", prefix),
+				"uniq_id":         fmt.Sprintf("nbe_%s_ip_address", boiler.Serial),
+				"dev":             devBlock,
+			}
+			sensors["serial"] = map[string]interface{}{
+				"name":            "Serial",
+				"entity_category": "diagnostic",
+				"stat_t":          fmt.Sprintf("%s/device/serial", prefix),
+				"avty_t":          fmt.Sprintf("%s/device/status", prefix),
+				"uniq_id":         fmt.Sprintf("nbe_%s_serial", boiler.Serial),
+				"dev":             devBlock,
+			}
+			sensors["boiler_temp"] = map[string]interface{}{
+				"name":                          "Boiler Temperature",
+				"entity_category":               "diagnostic",
+				"device_class":                  "temperature",
+				"native_unit_of_measurement":    "°C",
+				"suggested_unit_of_measurement": "°C",
+				"suggested_display_precision":   2,
+				"stat_t":                        fmt.Sprintf("%s/operating_data/boiler_temp", prefix),
+				"avty_t":                        fmt.Sprintf("%s/device/status", prefix),
+				"uniq_id":                       fmt.Sprintf("nbe_%s_boiler_temp", boiler.Serial),
+				"dev":                           devBlock,
+			}
+			sensors["oxygen"] = map[string]interface{}{
+				"name":                        "Oxygen",
+				"entity_category":             "diagnostic",
+				"unit_of_measurement":         "%",
+				"ic":                          "mdi:air-filter",
+				"suggested_display_precision": 2,
+				"stat_t":                      fmt.Sprintf("%s/operating_data/oxygen", prefix),
+				"avty_t":                      fmt.Sprintf("%s/device/status", prefix),
+				"uniq_id":                     fmt.Sprintf("nbe_%s_oxygen", boiler.Serial),
+				"dev":                         devBlock,
+			}
+			sensors["status"] = map[string]interface{}{
+				"name":            "Status",
+				"entity_category": "diagnostic",
+				"ic":              "mdi:power",
+				"stat_t":          fmt.Sprintf("%s/operating_data/state_text", prefix),
+				"avty_t":          fmt.Sprintf("%s/device/status", prefix),
+				"uniq_id":         fmt.Sprintf("nbe_%s_status", boiler.Serial),
+				"dev":             devBlock,
+			}
+			sensors["smoke_temp"] = map[string]interface{}{
+				"name":                          "Smoke Temperature",
+				"entity_category":               "diagnostic",
+				"device_class":                  "temperature",
+				"native_unit_of_measurement":    "°C",
+				"suggested_unit_of_measurement": "°C",
+				"suggested_display_precision":   2,
+				"stat_t":                        fmt.Sprintf("%s/operating_data/smoke_temp", prefix),
+				"avty_t":                        fmt.Sprintf("%s/device/status", prefix),
+				"uniq_id":                       fmt.Sprintf("nbe_%s_smoke_temp", boiler.Serial),
+				"dev":                           devBlock,
+			}
+			sensors["photo_level"] = map[string]interface{}{
+				"name":                        "Photo Level",
+				"entity_category":             "diagnostic",
+				"unit_of_measurement":         "%",
+				"ic":                          "mdi:lightbulb",
+				"suggested_display_precision": 2,
+				"stat_t":                      fmt.Sprintf("%s/operating_data/photo_level", prefix),
+				"avty_t":                      fmt.Sprintf("%s/device/status", prefix),
+				"uniq_id":                     fmt.Sprintf("nbe_%s_photo_level", boiler.Serial),
+				"dev":                         devBlock,
+			}
+			sensors["power_kw"] = map[string]interface{}{
+				"name":                          "Power (kW)",
+				"entity_category":               "diagnostic",
+				"device_class":                  "power",
+				"native_unit_of_measurement":    "kW",
+				"suggested_unit_of_measurement": "kW",
+				"suggested_display_precision":   2,
+				"stat_t":                        fmt.Sprintf("%s/operating_data/power_kw", prefix),
+				"avty_t":                        fmt.Sprintf("%s/device/status", prefix),
+				"uniq_id":                       fmt.Sprintf("nbe_%s_power_kw", boiler.Serial),
+				"dev":                           devBlock,
+			}
+			sensors["power_pct"] = map[string]interface{}{
+				"name":                        "Power (%)",
+				"entity_category":             "diagnostic",
+				"device_class":                "power",
+				"unit_of_measurement":         "%",
+				"suggested_display_precision": 2,
+				"stat_t":                      fmt.Sprintf("%s/operating_data/power_pct", prefix),
+				"avty_t":                      fmt.Sprintf("%s/device/status", prefix),
+				"uniq_id":                     fmt.Sprintf("nbe_%s_power_pct", boiler.Serial),
+				"dev":                         devBlock,
+			}
+
+			for k, m := range sensors {
+				err := mqttClient.PublishJSON(fmt.Sprintf("homeassistant/sensor/nbe_%s/%s/config", boiler.Serial, k), m)
+				if err != nil {
+					log.Errorf("Error publishing discovery message for %s: %v", k, err)
+				}
+			}
+
+			numbers := make(map[string]interface{})
+			numbers["boiler_setpoint"] = map[string]interface{}{
+				"name":                          "Wanted Temperature",
+				"entity_category":               "config",
+				"device_class":                  "temperature",
+				"native_unit_of_measurement":    "°C",
+				"suggested_unit_of_measurement": "°C",
+				"mode":                          "box",
+				"native_min_value":              0,
+				"native_max_value":              85,
+				"suggested_display_precision":   1,
+				"stat_t":                        fmt.Sprintf("%s/boiler/temp", prefix),
+				"cmd_t":                         fmt.Sprintf("%s/set/boiler/temp", prefix),
+				"step":                          "1",
+				"avty_t":                        fmt.Sprintf("%s/device/status", prefix),
+				"uniq_id":                       fmt.Sprintf("nbe_%s_boiler_setpoint", boiler.Serial),
+				"dev":                           devBlock,
+			}
+			numbers["boiler_power_min"] = map[string]interface{}{
+				"name":                        "Minimum Power (%)",
+				"entity_category":             "config",
+				"unit_of_measurement":         "%",
+				"mode":                        "box",
+				"native_min_value":            10,
+				"native_max_value":            100,
+				"suggested_display_precision": 0,
+				"stat_t":                      fmt.Sprintf("%s/regulation/boiler_power_min", prefix),
+				"cmd_t":                       fmt.Sprintf("%s/set/regulation/boiler_power_min", prefix),
+				"step":                        "1",
+				"avty_t":                      fmt.Sprintf("%s/device/status", prefix),
+				"uniq_id":                     fmt.Sprintf("nbe_%s_boiler_power_min", boiler.Serial),
+				"dev":                         devBlock,
+			}
+			numbers["boiler_power_max"] = map[string]interface{}{
+				"name":                        "Maximum Power (%)",
+				"entity_category":             "config",
+				"unit_of_measurement":         "%",
+				"mode":                        "box",
+				"native_min_value":            10,
+				"native_max_value":            100,
+				"suggested_display_precision": 0,
+				"stat_t":                      fmt.Sprintf("%s/regulation/boiler_power_max", prefix),
+				"cmd_t":                       fmt.Sprintf("%s/set/regulation/boiler_power_max", prefix),
+				"step":                        "1",
+				"avty_t":                      fmt.Sprintf("%s/device/status", prefix),
+				"uniq_id":                     fmt.Sprintf("nbe_%s_boiler_power_max", boiler.Serial),
+				"dev":                         devBlock,
+			}
+			numbers["diff_under"] = map[string]interface{}{
+				"name":                          "Difference Under",
+				"entity_category":               "config",
+				"device_class":                  "temperature",
+				"native_unit_of_measurement":    "°C",
+				"suggested_unit_of_measurement": "°C",
+				"mode":                          "box",
+				"ic":                            "mdi:arrow-collapse-down",
+				"native_min_value":              0,
+				"native_max_value":              50,
+				"suggested_display_precision":   1,
+				"stat_t":                        fmt.Sprintf("%s/boiler/diff_under", prefix),
+				"cmd_t":                         fmt.Sprintf("%s/set/boiler/diff_under", prefix),
+				"step":                          "1",
+				"avty_t":                        fmt.Sprintf("%s/device/status", prefix),
+				"uniq_id":                       fmt.Sprintf("nbe_%s_diff_under", boiler.Serial),
+				"dev":                           devBlock,
+			}
+			numbers["diff_over"] = map[string]interface{}{
+				"name":                          "Difference Over",
+				"entity_category":               "config",
+				"device_class":                  "temperature",
+				"native_unit_of_measurement":    "°C",
+				"suggested_unit_of_measurement": "°C",
+				"mode":                          "box",
+				"ic":                            "mdi:arrow-collapse-up",
+				"native_min_value":              10,
+				"native_max_value":              20,
+				"suggested_display_precision":   1,
+				"stat_t":                        fmt.Sprintf("%s/boiler/diff_over", prefix),
+				"cmd_t":                         fmt.Sprintf("%s/set/boiler/diff_over", prefix),
+				"step":                          "1",
+				"avty_t":                        fmt.Sprintf("%s/device/status", prefix),
+				"uniq_id":                       fmt.Sprintf("nbe_%s_diff_over", boiler.Serial),
+				"dev":                           devBlock,
+			}
+			numbers["hopper_content"] = map[string]interface{}{
+				"name":                          "Hopper",
+				"entity_category":               "config",
+				"device_class":                  "weight",
+				"native_unit_of_measurement":    "kg",
+				"suggested_unit_of_measurement": "kg",
+				"mode":                          "box",
+				"ic":                            "mdi:storage-tank",
+				"min":                           0,
+				"max":                           999,
+				"suggested_display_precision":   1,
+				"stat_t":                        fmt.Sprintf("%s/hopper/content", prefix),
+				"cmd_t":                         fmt.Sprintf("%s/set/hopper/content", prefix),
+				"step":                          "1",
+				"avty_t":                        fmt.Sprintf("%s/device/status", prefix),
+				"uniq_id":                       fmt.Sprintf("nbe_%s_hopper_content", boiler.Serial),
+				"dev":                           devBlock,
+			}
+
+			for k, m := range numbers {
+				err := mqttClient.PublishJSON(fmt.Sprintf("homeassistant/number/nbe_%s/%s/config", boiler.Serial, k), m)
+				if err != nil {
+					log.Errorf("Error publishing discovery message for %s: %v", k, err)
+				}
+			}
+
+			buttons := make(map[string]interface{})
+			buttons["start_calibrate"] = map[string]interface{}{
+				"name":            "Start O2 Sensor Calibration",
+				"entity_category": "config",
+				"ic":              "mdi:air-filter",
+				"stat_t":          fmt.Sprintf("%s/oxygen/start_calibrate", prefix),
+				"cmd_t":           fmt.Sprintf("%s/set/oxygen/start_calibrate", prefix),
+				"avty_t":          fmt.Sprintf("%s/device/status", prefix),
+				"uniq_id":         fmt.Sprintf("nbe_%s_start_calibrate", boiler.Serial),
+				"payload_press":   "1",
+				"dev":             devBlock,
+			}
+
+			for k, m := range buttons {
+				err := mqttClient.PublishJSON(fmt.Sprintf("homeassistant/button/nbe_%s/%s/config", boiler.Serial, k), m)
+				if err != nil {
+					log.Errorf("Error publishing discovery message for %s: %v", k, err)
+				}
+			}
+
+			switches := make(map[string]interface{})
+			switches["power"] = map[string]interface{}{
+				"name":            "Power",
+				"entity_category": "config",
+				"ic":              "mdi:power",
+				"state_topic":     fmt.Sprintf("%s/operating_data/state_on", prefix),
+				"cmd_t":           fmt.Sprintf("%s/set/device/power_switch", prefix),
+				"avty_t":          fmt.Sprintf("%s/device/status", prefix),
+				"uniq_id":         fmt.Sprintf("nbe_%s_power", boiler.Serial),
+				"dev":             devBlock,
+			}
+
+			for k, m := range switches {
+				err := mqttClient.PublishJSON(fmt.Sprintf("homeassistant/switch/nbe_%s/%s/config", boiler.Serial, k), m)
+				if err != nil {
+					log.Errorf("Error publishing discovery message for %s: %v", k, err)
+				}
+			}
+
+			time.Sleep(2 * time.Minute)
+		}(mqttPrefix)
+	}
+
 	err = <-doneChan
+
 	if err != nil {
 		log.Fatal(err)
 		os.Exit(1)

@@ -1,6 +1,6 @@
 /*
  * This file is part of the boiler-mate distribution (https://github.com/mlipscombe/boiler-mate).
- * Copyright (c) 2021 Mark Lipscombe.
+ * Copyright (c) 2021-2023 Mark Lipscombe.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -45,7 +45,12 @@ func NewClient(uri *url.URL, client_id string, prefix string) (*Client, error) {
 		Prefix:   prefix,
 	}
 	opts := createClientOptions(client.URI, client.ClientID)
+
+	opts.SetWill(fmt.Sprintf("%s/device/status", client.Prefix), "offline", 1, true)
 	err := client.connect(opts)
+
+	client.connection.Publish(fmt.Sprintf("%s/device/status", client.Prefix), 1, true, "online")
+
 	return &client, err
 }
 
@@ -62,19 +67,53 @@ func (client *Client) connect(opts *mqtt.ClientOptions) error {
 
 func (client *Client) PublishMany(topic string, values map[string]interface{}) error {
 	for key, val := range values {
-		jsonVal, err := json.Marshal(val)
+		err := client.PublishRaw(fmt.Sprintf("%s/%s/%s", client.Prefix, topic, key), val)
 		if err != nil {
-			log.Errorf("Error marshalling %s: %v", key, val)
 			return err
 		}
-		token := client.connection.Publish(fmt.Sprintf("%s/%s/%s", client.Prefix, topic, key), 0, true, jsonVal)
-		go func() {
-			<-token.Done()
-			if token.Error() != nil {
-				log.Error(token.Error())
-			}
-		}()
 	}
+	return nil
+}
+
+func (client *Client) PublishRaw(topic string, val interface{}) error {
+	var payload []byte
+	switch p := val.(type) {
+	case string:
+		payload = []byte(p)
+	case []byte:
+		payload = p
+	default:
+		jsonVal, err := json.Marshal(val)
+		if err != nil {
+			return fmt.Errorf("marshalling %s: %v", topic, val)
+		}
+		payload = jsonVal
+	}
+
+	token := client.connection.Publish(topic, 0, true, payload)
+	go func() {
+		<-token.Done()
+		if token.Error() != nil {
+			log.Error(token.Error())
+		}
+	}()
+
+	return nil
+}
+
+func (client *Client) PublishJSON(topic string, val interface{}) error {
+	jsonVal, err := json.Marshal(val)
+	if err != nil {
+		return fmt.Errorf("marshalling %s: %v", topic, val)
+	}
+	token := client.connection.Publish(topic, 0, true, jsonVal)
+	go func() {
+		<-token.Done()
+		if token.Error() != nil {
+			log.Error(token.Error())
+		}
+	}()
+
 	return nil
 }
 
@@ -98,6 +137,16 @@ func createClientOptions(uri *url.URL, clientId string) *mqtt.ClientOptions {
 	password, _ := uri.User.Password()
 	opts.SetPassword(password)
 	opts.SetClientID(clientId)
+	opts.SetKeepAlive(30 * time.Second)
+	opts.SetMaxReconnectInterval(10 * time.Second)
 	opts.SetAutoReconnect(true)
+
+	opts.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
+		log.Errorf("mqtt connection lost: %v", err)
+	})
+	opts.SetReconnectingHandler(func(_ mqtt.Client, _ *mqtt.ClientOptions) {
+		log.Warn("mqtt reconnecting")
+	})
+
 	return opts
 }
