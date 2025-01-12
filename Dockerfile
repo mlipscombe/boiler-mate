@@ -10,7 +10,7 @@ RUN go build -o /boiler-mate
 
 FROM scratch
 WORKDIR /
-COPY --from=build /boiler-mate ./
+COPY --from=builder /boiler-mate ./
 EXPOSE 2112
 USER nobody:nogroup
 
