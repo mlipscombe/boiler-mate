@@ -12,7 +12,7 @@ FROM scratch
 WORKDIR /
 COPY --from=builder /boiler-mate ./
 EXPOSE 2112
-USER nobody:nogroup
+USER 10001:10001
 
 ENV BOILER_MATE_METRICS="0.0.0.0:2112"
 
