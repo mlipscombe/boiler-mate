@@ -34,7 +34,7 @@ Synopsis:
             debug mode
         --bind string
             address to bind for healthz and prometheus metrics endpoint, or "false"
-            to disable (default "localhost:2112")
+            to disable (default "0.0.0.0:2112")
         --controller string
             controller URI, in the format tcp://<serial>:<password>@<host>:<port>
         --mqtt string
