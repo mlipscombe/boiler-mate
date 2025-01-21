@@ -18,9 +18,12 @@
 package mqtt
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -132,7 +135,53 @@ func (client *Client) Subscribe(topic string, qos byte, callback MessageHandler)
 
 func createClientOptions(uri *url.URL, clientId string) *mqtt.ClientOptions {
 	opts := mqtt.NewClientOptions()
-	opts.AddBroker(fmt.Sprintf("tcp://%s", uri.Host))
+
+	port := uri.Port()
+	if port == "" {
+		if uri.Scheme == "mqtts" {
+			port = "8883"
+		} else {
+			port = "1883"
+		}
+	}
+
+	if uri.Scheme == "mqtts" {
+		query := uri.Query()
+		tlsCert := query.Get("tls_cert")
+		tlsKey := query.Get("tls_key")
+		caCert := query.Get("tls_cacert")
+		insecure := query.Get("insecure")
+
+		tlsConfig := &tls.Config{}
+
+		if insecure == "true" {
+			tlsConfig.InsecureSkipVerify = true
+		}
+
+		if tlsCert != "" && tlsKey != "" {
+			cert, err := tls.LoadX509KeyPair(tlsCert, tlsKey)
+			if err != nil {
+				log.Fatalf("failed to load tls cert and key: %v", err)
+			}
+			tlsConfig.Certificates = []tls.Certificate{cert}
+		}
+
+		if caCert != "" {
+			caCertPool := x509.NewCertPool()
+			caCertData, err := os.ReadFile(caCert)
+			if err != nil {
+				log.Fatalf("failed to read ca cert: %v", err)
+			}
+			caCertPool.AppendCertsFromPEM(caCertData)
+			tlsConfig.RootCAs = caCertPool
+		}
+
+		opts.SetTLSConfig(tlsConfig)
+		opts.AddBroker(fmt.Sprintf("ssl://%s:%s", uri.Hostname(), port))
+	} else {
+		opts.AddBroker(fmt.Sprintf("tcp://%s:%s", uri.Hostname(), port))
+	}
+
 	opts.SetUsername(uri.User.Username())
 	password, _ := uri.User.Password()
 	opts.SetPassword(password)

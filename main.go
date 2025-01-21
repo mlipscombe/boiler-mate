@@ -63,7 +63,7 @@ func main() {
 	flag.StringVar(&logLevel, "log-level", lookupEnvOrString("BOILER_MATE_LOG_LEVEL", "INFO"), "logging level")
 	flag.StringVar(&bind, "bind", lookupEnvOrString("BOILER_MATE_BIND", "0.0.0.0:2112"), "address to bind for healthz and prometheus metrics endpoints (default 0.0.0.0:2112), or \"false\" to disable")
 	flag.StringVar(&controllerUrlOpt, "controller", lookupEnvOrString("BOILER_MATE_CONTROLLER", "tcp://00000:0123456789@192.168.1.100:8483"), "controller URI, in the format tcp://<serial>:<password>@<host>:<port>")
-	flag.StringVar(&mqttUrlOpt, "mqtt", lookupEnvOrString("BOILER_MATE_MQTT", "tcp://localhost:1883"), "MQTT URI, in the format tcp://[<user>:<password>]@<host>:<port>[/<prefix>]")
+	flag.StringVar(&mqttUrlOpt, "mqtt", lookupEnvOrString("BOILER_MATE_MQTT", "mqtt[s]://localhost:1883"), "MQTT URI, in the format mqtt[s]://[<user>:<password>]@<host>:<port>[/<prefix>]")
 	flag.BoolVar(&haDiscovery, "homeassistant", lookupEnvOrBool("BOILER_MATE_HOMEASSISTANT", true), "enable Home Assistant autodiscovery (default: true)")
 	flag.Parse()
 
