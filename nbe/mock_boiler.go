@@ -189,7 +189,11 @@ func (mb *MockBoiler) handleRequest(data []byte, addr net.Addr) {
 		return
 	}
 
-	mb.listener.WriteTo(responseBuffer.Bytes(), addr)
+	_, err = mb.listener.WriteTo(responseBuffer.Bytes(), addr)
+	if err != nil {
+		// Log error but don't fail - this is a mock server
+		return
+	}
 }
 
 func (mb *MockBoiler) processRequest(request *NBERequest) *NBEResponse {

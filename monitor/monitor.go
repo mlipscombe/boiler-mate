@@ -26,6 +26,7 @@ import (
 	"github.com/mlipscombe/boiler-mate/mqtt"
 	"github.com/mlipscombe/boiler-mate/nbe"
 	"github.com/prometheus/client_golang/prometheus"
+	log "github.com/sirupsen/logrus"
 )
 
 // StartSettingsMonitor polls settings data and publishes changes
@@ -47,7 +48,7 @@ func StartSettingsMonitorWithReady(boiler *nbe.NBE, mqttClient *mqtt.Client, cat
 
 	go func() {
 		for {
-			boiler.GetAsync(nbe.GetSetupFunction, fmt.Sprintf("%s.*", category), func(response *nbe.NBEResponse) {
+			_, err := boiler.GetAsync(nbe.GetSetupFunction, fmt.Sprintf("%s.*", category), func(response *nbe.NBEResponse) {
 				changeSet := make(map[string]interface{})
 				for key, value := range response.Payload {
 					// Register prometheus gauge if numeric and not exists
@@ -60,7 +61,9 @@ func StartSettingsMonitorWithReady(boiler *nbe.NBE, mqttClient *mqtt.Client, cat
 							},
 							[]string{"serial"},
 						)
-						prometheus.Register(gauges[key])
+						if err := prometheus.Register(gauges[key]); err != nil {
+							log.Debugf("Failed to register gauge %s.%s: %v", category, key, err)
+						}
 					}
 
 					// Publish if changed
@@ -70,7 +73,9 @@ func StartSettingsMonitorWithReady(boiler *nbe.NBE, mqttClient *mqtt.Client, cat
 						updateGauge(gauges[key], boiler.Serial, value)
 					}
 				}
-				mqttClient.PublishMany(category, changeSet)
+				if err := mqttClient.PublishMany(category, changeSet); err != nil {
+					log.Debugf("Failed to publish %s changes: %v", category, err)
+				}
 
 				// Signal ready after first successful publish
 				if firstPublish && ready != nil {
@@ -81,6 +86,9 @@ func StartSettingsMonitorWithReady(boiler *nbe.NBE, mqttClient *mqtt.Client, cat
 					firstPublish = false
 				}
 			})
+			if err != nil {
+				log.Debugf("Failed to get %s settings: %v", category, err)
+			}
 			time.Sleep(10 * time.Second)
 		}
 	}()
@@ -98,7 +106,7 @@ func StartOperatingDataMonitor(boiler *nbe.NBE, mqttClient *mqtt.Client) chan bo
 
 	go func() {
 		for {
-			boiler.GetAsync(nbe.GetOperatingDataFunction, "*", func(response *nbe.NBEResponse) {
+			_, err := boiler.GetAsync(nbe.GetOperatingDataFunction, "*", func(response *nbe.NBEResponse) {
 				changeSet := make(map[string]interface{})
 				for key, value := range response.Payload {
 					// Register prometheus gauge if numeric and not exists
@@ -133,7 +141,11 @@ func StartOperatingDataMonitor(boiler *nbe.NBE, mqttClient *mqtt.Client) chan bo
 						}
 					}
 				}
-				go mqttClient.PublishMany("operating_data", changeSet)
+				go func() {
+					if err := mqttClient.PublishMany("operating_data", changeSet); err != nil {
+						log.Debugf("Failed to publish operating_data: %v", err)
+					}
+				}()
 
 				// Signal ready after first successful publish
 				if firstPublish {
@@ -144,6 +156,9 @@ func StartOperatingDataMonitor(boiler *nbe.NBE, mqttClient *mqtt.Client) chan bo
 					firstPublish = false
 				}
 			})
+			if err != nil {
+				log.Debugf("Failed to get operating data: %v", err)
+			}
 			time.Sleep(5 * time.Second)
 		}
 	}()
@@ -158,7 +173,7 @@ func StartAdvancedDataMonitor(boiler *nbe.NBE, mqttClient *mqtt.Client) {
 
 	go func() {
 		for {
-			boiler.GetAsync(nbe.GetAdvancedDataFunction, "*", func(response *nbe.NBEResponse) {
+			_, err := boiler.GetAsync(nbe.GetAdvancedDataFunction, "*", func(response *nbe.NBEResponse) {
 				changeSet := make(map[string]interface{})
 				for key, value := range response.Payload {
 					// Register prometheus gauge if numeric and not exists
@@ -181,8 +196,15 @@ func StartAdvancedDataMonitor(boiler *nbe.NBE, mqttClient *mqtt.Client) {
 						updateGauge(gauges[key], boiler.Serial, value)
 					}
 				}
-				go mqttClient.PublishMany("advanced_data", changeSet)
+				go func() {
+					if err := mqttClient.PublishMany("advanced_data", changeSet); err != nil {
+						log.Debugf("Failed to publish advanced_data: %v", err)
+					}
+				}()
 			})
+			if err != nil {
+				log.Debugf("Failed to get advanced data: %v", err)
+			}
 			time.Sleep(5 * time.Second)
 		}
 	}()

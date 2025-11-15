@@ -81,7 +81,9 @@ func main() {
 			http.Handle("/healthz", instance.Healthz())
 			http.Handle("/liveness", instance.Liveness())
 
-			http.ListenAndServe(listenAddress, nil)
+			if err := http.ListenAndServe(listenAddress, nil); err != nil {
+				log.Errorf("HTTP server error: %v", err)
+			}
 		}(cfg.Bind)
 	}
 
@@ -113,23 +115,32 @@ func main() {
 
 	log.Infof("Connected to MQTT broker %s (publishing on \"%s\")", mqttUrl.Host, mqttPrefix)
 
-	mqttClient.Subscribe("set/+/+", 1, func(client *mqtt.Client, msg mqtt.Message) {
+	if err := mqttClient.Subscribe("set/+/+", 1, func(client *mqtt.Client, msg mqtt.Message) {
 		key := parseSetTopic(msg.Topic())
 		value := msg.Payload()
 
 		// Translate power switch commands
 		key, value = translatePowerCommand(key, value)
 
-		boiler.SetAsync(key, value, func(response *nbe.NBEResponse) {
+		_, err := boiler.SetAsync(key, value, func(response *nbe.NBEResponse) {
 			log.Infof("Set %s to %s: %v", key, value, response)
 		})
-	})
+		if err != nil {
+			log.Errorf("Failed to set %s to %s: %v", key, value, err)
+		}
+	}); err != nil {
+		log.Errorf("Failed to subscribe to set topics: %v", err)
+	}
 
-	go mqttClient.PublishMany("device", map[string]interface{}{
-		"status":     "online",
-		"serial":     boiler.Serial,
-		"ip_address": boiler.IPAddress,
-	})
+	go func() {
+		if err := mqttClient.PublishMany("device", map[string]interface{}{
+			"status":     "online",
+			"serial":     boiler.Serial,
+			"ip_address": boiler.IPAddress,
+		}); err != nil {
+			log.Errorf("Failed to publish device status: %v", err)
+		}
+	}()
 
 	// Start settings monitors for each category and collect ready channels
 	var settingsReady []chan bool

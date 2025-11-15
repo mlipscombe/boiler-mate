@@ -121,7 +121,10 @@ func (frame *NBERequest) Pack(writer io.Writer) error {
 			return err
 		}
 
-		binary.Write(writer, binary.BigEndian, []byte("*"))
+		err = binary.Write(writer, binary.BigEndian, []byte("*"))
+		if err != nil {
+			return err
+		}
 		err = binary.Write(buf, binary.BigEndian, padBytes)
 		if err != nil {
 			return err
@@ -132,7 +135,10 @@ func (frame *NBERequest) Pack(writer io.Writer) error {
 			return err
 		}
 	} else {
-		binary.Write(writer, binary.BigEndian, []byte(" "))
+		err = binary.Write(writer, binary.BigEndian, []byte(" "))
+		if err != nil {
+			return err
+		}
 		_, err = buf.WriteTo(writer)
 		if err != nil {
 			return err
