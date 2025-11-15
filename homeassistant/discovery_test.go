@@ -149,3 +149,92 @@ func TestPublishSwitchesCreatesCorrectTopics(t *testing.T) {
 		t.Errorf("Expected %d switches, got %d", len(expectedSwitches), len(switches))
 	}
 }
+
+func TestEntityConfigBuildUsesNativeStepForWeightAndTemperature(t *testing.T) {
+	serial := "TEST12345"
+	prefix := "nbe/TEST12345"
+	devBlock := createDeviceBlock(serial)
+
+	// Test weight entity (hopper_content)
+	weightEntity := EntityConfig{
+		Key:          "hopper_content",
+		Name:         "Hopper",
+		EntityType:   Number,
+		DeviceClass:  "weight",
+		Unit:         "kg",
+		MinValue:     0,
+		MaxValue:     999,
+		Step:         "1",
+		StateTopic:   "hopper/content",
+		CommandTopic: "set/hopper/content",
+	}
+
+	config := weightEntity.Build(serial, prefix, devBlock)
+
+	// Should use native_step, native_min_value, native_max_value for weight
+	if step, ok := config["native_step"]; !ok || step != "1" {
+		t.Errorf("Expected native_step='1' for weight entity, got %v", config["native_step"])
+	}
+	if _, ok := config["step"]; ok {
+		t.Error("Expected 'step' to not be set for weight entity, but it was")
+	}
+	if minVal, ok := config["native_min_value"]; !ok || minVal != 0 {
+		t.Errorf("Expected native_min_value=0 for weight entity, got %v", config["native_min_value"])
+	}
+	if maxVal, ok := config["native_max_value"]; !ok || maxVal != 999 {
+		t.Errorf("Expected native_max_value=999 for weight entity, got %v", config["native_max_value"])
+	}
+
+	// Test temperature entity
+	tempEntity := EntityConfig{
+		Key:          "boiler_setpoint",
+		Name:         "Wanted Temperature",
+		EntityType:   Number,
+		DeviceClass:  "temperature",
+		Unit:         "°C",
+		MinValue:     0,
+		MaxValue:     85,
+		Step:         "1",
+		StateTopic:   "boiler/temp",
+		CommandTopic: "set/boiler/temp",
+	}
+
+	config = tempEntity.Build(serial, prefix, devBlock)
+
+	// Should use native_step, native_min_value, native_max_value for temperature
+	if step, ok := config["native_step"]; !ok || step != "1" {
+		t.Errorf("Expected native_step='1' for temperature entity, got %v", config["native_step"])
+	}
+	if _, ok := config["step"]; ok {
+		t.Error("Expected 'step' to not be set for temperature entity, but it was")
+	}
+
+	// Test percentage entity (no device_class)
+	percentEntity := EntityConfig{
+		Key:          "boiler_power_min",
+		Name:         "Minimum Power (%)",
+		EntityType:   Number,
+		Unit:         "%",
+		MinValue:     10,
+		MaxValue:     100,
+		Step:         "1",
+		StateTopic:   "regulation/boiler_power_min",
+		CommandTopic: "set/regulation/boiler_power_min",
+	}
+
+	config = percentEntity.Build(serial, prefix, devBlock)
+
+	// Should use regular step, min, max for non-native units
+	if step, ok := config["step"]; !ok || step != "1" {
+		t.Errorf("Expected step='1' for percentage entity, got %v", config["step"])
+	}
+	if _, ok := config["native_step"]; ok {
+		t.Error("Expected 'native_step' to not be set for percentage entity, but it was")
+	}
+	if minVal, ok := config["min"]; !ok || minVal != 10 {
+		t.Errorf("Expected min=10 for percentage entity, got %v", config["min"])
+	}
+	if maxVal, ok := config["max"]; !ok || maxVal != 100 {
+		t.Errorf("Expected max=100 for percentage entity, got %v", config["max"])
+	}
+}

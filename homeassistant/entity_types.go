@@ -120,7 +120,11 @@ func (e *EntityConfig) Build(serial, prefix string, devBlock map[string]interfac
 			}
 		}
 		if e.Step != "" {
-			config["step"] = e.Step
+			if e.DeviceClass == "temperature" || e.DeviceClass == "weight" {
+				config["native_step"] = e.Step
+			} else {
+				config["step"] = e.Step
+			}
 		}
 	}
 
