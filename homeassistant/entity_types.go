@@ -68,7 +68,7 @@ func (e *EntityConfig) Build(serial, prefix string, devBlock map[string]interfac
 		config["ic"] = e.Icon
 	}
 	if e.Unit != "" {
-		if e.DeviceClass == "temperature" || e.DeviceClass == "weight" {
+		if e.DeviceClass == "temperature" {
 			config["native_unit_of_measurement"] = e.Unit
 			config["suggested_unit_of_measurement"] = e.Unit
 		} else {
@@ -106,21 +106,21 @@ func (e *EntityConfig) Build(serial, prefix string, devBlock map[string]interfac
 		}
 		if e.MinValue != nil {
 			// Use native_min_value for temperature, otherwise min
-			if e.DeviceClass == "temperature" || e.DeviceClass == "weight" {
+			if e.DeviceClass == "temperature" {
 				config["native_min_value"] = e.MinValue
 			} else {
 				config["min"] = e.MinValue
 			}
 		}
 		if e.MaxValue != nil {
-			if e.DeviceClass == "temperature" || e.DeviceClass == "weight" {
+			if e.DeviceClass == "temperature" {
 				config["native_max_value"] = e.MaxValue
 			} else {
 				config["max"] = e.MaxValue
 			}
 		}
 		if e.Step != "" {
-			if e.DeviceClass == "temperature" || e.DeviceClass == "weight" {
+			if e.DeviceClass == "temperature" {
 				config["native_step"] = e.Step
 			} else {
 				config["step"] = e.Step

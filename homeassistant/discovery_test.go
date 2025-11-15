@@ -150,40 +150,10 @@ func TestPublishSwitchesCreatesCorrectTopics(t *testing.T) {
 	}
 }
 
-func TestEntityConfigBuildUsesNativeStepForWeightAndTemperature(t *testing.T) {
+func TestEntityConfigBuildUsesNativeStepForTemperature(t *testing.T) {
 	serial := "TEST12345"
 	prefix := "nbe/TEST12345"
 	devBlock := createDeviceBlock(serial)
-
-	// Test weight entity (hopper_content)
-	weightEntity := EntityConfig{
-		Key:          "hopper_content",
-		Name:         "Hopper",
-		EntityType:   Number,
-		DeviceClass:  "weight",
-		Unit:         "kg",
-		MinValue:     0,
-		MaxValue:     999,
-		Step:         "1",
-		StateTopic:   "hopper/content",
-		CommandTopic: "set/hopper/content",
-	}
-
-	config := weightEntity.Build(serial, prefix, devBlock)
-
-	// Should use native_step, native_min_value, native_max_value for weight
-	if step, ok := config["native_step"]; !ok || step != "1" {
-		t.Errorf("Expected native_step='1' for weight entity, got %v", config["native_step"])
-	}
-	if _, ok := config["step"]; ok {
-		t.Error("Expected 'step' to not be set for weight entity, but it was")
-	}
-	if minVal, ok := config["native_min_value"]; !ok || minVal != 0 {
-		t.Errorf("Expected native_min_value=0 for weight entity, got %v", config["native_min_value"])
-	}
-	if maxVal, ok := config["native_max_value"]; !ok || maxVal != 999 {
-		t.Errorf("Expected native_max_value=999 for weight entity, got %v", config["native_max_value"])
-	}
 
 	// Test temperature entity
 	tempEntity := EntityConfig{
@@ -199,7 +169,7 @@ func TestEntityConfigBuildUsesNativeStepForWeightAndTemperature(t *testing.T) {
 		CommandTopic: "set/boiler/temp",
 	}
 
-	config = tempEntity.Build(serial, prefix, devBlock)
+	config := tempEntity.Build(serial, prefix, devBlock)
 
 	// Should use native_step, native_min_value, native_max_value for temperature
 	if step, ok := config["native_step"]; !ok || step != "1" {
