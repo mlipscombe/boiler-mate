@@ -141,9 +141,7 @@ test-integration:
 
 test-integration-up:
 	@echo "Starting integration test environment..."
-	docker compose -f docker-compose.test.yml up -d
-	@echo "Waiting for services to be ready..."
-	@sleep 5
+	docker compose -f docker-compose.test.yml up -d --wait
 	@echo "Integration environment is ready!"
 	@echo "MQTT broker: localhost:1883"
 	@echo "Run 'make test-integration-down' to stop services"
