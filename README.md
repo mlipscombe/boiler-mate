@@ -112,17 +112,16 @@ See [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) for detailed documentation.
 
 ## CI/CD
 
-[![CI/CD](https://github.com/mlipscombe/boiler-mate/workflows/CI%2FCD/badge.svg)](https://github.com/mlipscombe/boiler-mate/actions)
+[![Build & Publish](https://github.com/mlipscombe/boiler-mate/workflows/Build%20%26%20Publish/badge.svg)](https://github.com/mlipscombe/boiler-mate/actions)
 
 The project uses GitHub Actions for continuous integration and deployment:
 
-- **Unit Tests** - Run on every push and PR
-- **Integration Tests** - Full system tests with real MQTT broker
+- **All Tests** - Unit + integration tests with real MQTT broker (single run with race detection)
 - **Build Verification** - Ensures code compiles
-- **Linting** - Code quality checks
+- **Linting** - Code quality checks with golangci-lint
 - **Docker Multi-Arch Builds** - Automatic builds for amd64 and arm64
 
-See [.github/workflows/README.md](.github/workflows/README.md) for pipeline details.
+All tests run together in one job for faster feedback.
 
 ## Contributing
 

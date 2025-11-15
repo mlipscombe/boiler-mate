@@ -35,8 +35,8 @@ type MockBoiler struct {
 	Serial        string
 	Port          int
 	listener      net.PacketConn
-	running       bool
-	mu            sync.RWMutex
+	running       bool              // Protected by mu
+	mu            sync.RWMutex      // Protects running and data
 	data          map[string]map[string]interface{}
 	rsaPrivateKey *rsa.PrivateKey
 	rsaPublicKey  *rsa.PublicKey
@@ -79,7 +79,10 @@ func (mb *MockBoiler) Start() error {
 	}
 	mb.listener = listener
 	mb.Port = listener.LocalAddr().(*net.UDPAddr).Port
+	
+	mb.mu.Lock()
 	mb.running = true
+	mb.mu.Unlock()
 
 	go mb.listen()
 	return nil
@@ -101,11 +104,22 @@ func (mb *MockBoiler) GetAddr() string {
 }
 
 func (mb *MockBoiler) listen() {
-	for mb.running {
+	for {
+		mb.mu.RLock()
+		running := mb.running
+		mb.mu.RUnlock()
+		
+		if !running {
+			return
+		}
+		
 		buffer := make([]byte, 1024)
 		n, addr, err := mb.listener.ReadFrom(buffer)
 		if err != nil {
-			if mb.running {
+			mb.mu.RLock()
+			stillRunning := mb.running
+			mb.mu.RUnlock()
+			if stillRunning {
 				continue
 			}
 			return

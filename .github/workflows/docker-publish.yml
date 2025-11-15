@@ -9,28 +9,7 @@ on:
 
 jobs:
   test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v3
-
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: '1.25'
-
-      - name: Run unit tests
-        run: go test -v -race -coverprofile=coverage.out ./...
-
-      - name: Upload coverage to codecov
-        uses: codecov/codecov-action@v3
-        with:
-          files: ./coverage.out
-          flags: unittests
-
-  integration-test:
-    name: Integration Test
+    name: Test (Unit + Integration)
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
@@ -48,17 +27,22 @@ jobs:
         run: |
           timeout 30 bash -c 'until docker exec boiler-mate-test-mqtt mosquitto_sub -t "$$SYS/#" -C 1 -W 1 > /dev/null 2>&1; do sleep 1; done'
 
-      - name: Run integration tests
-        run: INTEGRATION_TESTS=1 go test -v -timeout 30s ./test/integration
+      - name: Run all tests with coverage
+        run: INTEGRATION_TESTS=1 go test -v -race -coverprofile=coverage.out ./...
 
       - name: Stop integration test environment
         if: always()
         run: docker compose -f docker-compose.test.yml down
 
+      - name: Upload coverage to codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.out
+
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [test, integration-test]
+    needs: [test]
     steps:
       - name: Check out code
         uses: actions/checkout@v3
@@ -79,7 +63,7 @@ jobs:
   push_to_registry:
     name: Push Docker image to GitHub Packages
     runs-on: ubuntu-latest
-    needs: [test, integration-test, build]
+    needs: [test, build]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
     steps:
       - name: Set up QEMU
