@@ -7,7 +7,7 @@ COPY . .
 ENV CGO_ENABLED=0
 RUN apk add -U --no-cache ca-certificates && update-ca-certificates
 RUN go mod download
-RUN go build -o /boiler-mate
+RUN go build -o /boiler-mate ./cmd/boiler-mate
 
 FROM scratch
 WORKDIR /

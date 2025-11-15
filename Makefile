@@ -29,7 +29,8 @@ DOCKER_BUILD_CONTEXT=.
 DOCKER_FILE_PATH=Dockerfile
 
 .PHONY: pre-build docker-build post-build build release patch-release minor-release major-release tag check-status check-release showver \
-	push pre-push do-push post-push
+	push pre-push do-push post-push test test-verbose test-coverage test-race test-integration test-integration-up \
+	test-integration-down test-integration-logs test-all fmt vet lint check
 
 build: pre-build docker-build post-build
 
@@ -113,3 +114,69 @@ check-status:
 check-release: .release
 	@. $(RELEASE_SUPPORT) ; tagExists $(TAG) || (echo "ERROR: version not yet tagged in git. make [minor,major,patch]-release." >&2 && exit 1) ;
 	@. $(RELEASE_SUPPORT) ; ! differsFromRelease $(TAG) || (echo "ERROR: current directory differs from tagged $(TAG). make [minor,major,patch]-release." ; exit 1)
+
+# Test targets
+test:
+	@echo "Running unit tests..."
+	go test -v -short ./...
+
+test-verbose:
+	@echo "Running tests with verbose output..."
+	go test -v -count=1 -short ./...
+
+test-coverage:
+	@echo "Running tests with coverage..."
+	go test -v -short -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report generated: coverage.html"
+
+test-race:
+	@echo "Running tests with race detection..."
+	go test -race -v -short ./...
+
+# Integration test targets
+test-integration:
+	@echo "Running integration tests..."
+	@./scripts/integration-test.sh
+
+test-integration-up:
+	@echo "Starting integration test environment..."
+	docker compose -f docker-compose.test.yml up -d
+	@echo "Waiting for services to be ready..."
+	@sleep 5
+	@echo "Integration environment is ready!"
+	@echo "MQTT broker: localhost:1883"
+	@echo "Run 'make test-integration-down' to stop services"
+
+test-integration-down:
+	@echo "Stopping integration test environment..."
+	docker compose -f docker-compose.test.yml down
+
+test-integration-logs:
+	docker compose -f docker-compose.test.yml logs -f
+
+test-all: test test-integration
+	@echo "All tests passed!"
+
+# Code quality targets
+fmt:
+	@echo "Formatting code..."
+	go fmt ./...
+
+vet:
+	@echo "Running go vet..."
+	go vet ./...
+
+lint:
+	@echo "Running golint..."
+	@command -v golint >/dev/null 2>&1 || { echo "golint not installed, skipping..."; exit 0; }
+	golint ./...
+
+# Combined check target for CI
+check: fmt vet test
+	@echo "All checks passed!"
+
+# Build binary
+binary:
+	@echo "Building binary..."
+	go build -o boiler-mate ./cmd/boiler-mate

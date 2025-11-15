@@ -28,6 +28,8 @@ import (
 	"time"
 )
 
+// Use shared constants from frame_helpers.go
+
 type NBERequest struct {
 	AppID        string         // client application id
 	ControllerID string         // controller id
@@ -140,65 +142,61 @@ func (frame *NBERequest) Pack(writer io.Writer) error {
 }
 
 func (frame *NBERequest) Unpack(reader io.Reader) error {
+	// Read fixed-size string fields
 	var err error
-	err = binary.Read(reader, binary.BigEndian, frame.AppID[:12])
-	if err != nil {
+	if frame.AppID, err = readString(reader, AppIDSize, "AppID"); err != nil {
 		return err
 	}
-	err = binary.Read(reader, binary.BigEndian, frame.ControllerID[:6])
-	if err != nil {
+	if frame.ControllerID, err = readString(reader, ControllerIDSize, "ControllerID"); err != nil {
 		return err
 	}
-	encryption := make([]byte, 1)
-	err = binary.Read(reader, binary.BigEndian, encryption)
-	if err != nil {
+
+	// Skip encryption byte and validate start marker
+	if err := readAndValidateMarker(reader, StartMarker, "start marker"); err != nil {
 		return err
 	}
-	startMarker := make([]byte, 1)
-	err = binary.Read(reader, binary.BigEndian, startMarker)
-	if err != nil {
+
+	// Read function and sequence number (ASCII encoded)
+	if frame.Function, err = readASCIIInt16(reader, FunctionSize, "Function"); err != nil {
 		return err
 	}
-	if startMarker[0] != 0x02 {
-		return fmt.Errorf("invalid start marker: %c", startMarker[0])
-	}
-	err = binary.Read(reader, binary.BigEndian, &frame.Function)
-	if err != nil {
+	if frame.SeqNo, err = readASCIIInt8(reader, SeqNoSize, "SeqNo"); err != nil {
 		return err
 	}
-	err = binary.Read(reader, binary.BigEndian, &frame.SeqNo)
-	if err != nil {
+
+	// Read PinCode
+	if frame.PinCode, err = readString(reader, PinCodeSize, "PinCode"); err != nil {
 		return err
 	}
-	err = binary.Read(reader, binary.BigEndian, frame.PinCode[:10])
-	if err != nil {
-		return err
-	}
+
+	// Read timestamp (ASCII encoded Unix timestamp)
 	var ts int64
-	err = binary.Read(reader, binary.BigEndian, &ts)
-	if err != nil {
+	if ts, err = readASCIIInt64(reader, TimestampSize, "Timestamp"); err != nil {
 		return err
 	}
 	frame.Timestamp = time.Unix(ts, 0)
-	err = binary.Read(reader, binary.BigEndian, "extr")
-	if err != nil {
+
+	// Skip "extr" marker
+	if _, err = readBytes(reader, ExtrMarkerSize, "extr marker"); err != nil {
 		return err
 	}
-	var payloadLenBytes [3]byte
-	err = binary.Read(reader, binary.BigEndian, &payloadLenBytes)
-	if err != nil {
+
+	// Read payload length and payload
+	var payloadLen int
+	if payloadLen, err = readASCIIInt(reader, PayloadLenSize, "payload length"); err != nil {
 		return err
 	}
-	payloadLen := int(payloadLenBytes[0]) | int(payloadLenBytes[1])<<8 | int(payloadLenBytes[2])<<16
-	frame.Payload = make([]byte, int(payloadLen))
-	err = binary.Read(reader, binary.BigEndian, frame.Payload)
-	if err != nil {
+
+	if frame.Payload, err = readBytes(reader, payloadLen, "payload"); err != nil {
 		return err
 	}
-	err = binary.Read(reader, binary.BigEndian, 0x04)
-	if err != nil {
+
+	// Read and ignore end marker
+	if _, err = readBytes(reader, 1, "end marker"); err != nil {
 		return err
 	}
 
 	return nil
 }
+
+// Helper functions are now in frame_helpers.go

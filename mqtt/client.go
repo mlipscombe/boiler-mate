@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -31,23 +32,31 @@ import (
 )
 
 type Client struct {
-	URI        *url.URL
-	ClientID   string
-	Prefix     string
-	connection mqtt.Client
+	URI           *url.URL
+	ClientID      string
+	Prefix        string
+	connection    mqtt.Client
+	subscriptions map[string]subscriptionInfo
+	subMutex      sync.RWMutex
+}
+
+type subscriptionInfo struct {
+	qos      byte
+	callback MessageHandler
 }
 
 type Message mqtt.Message
 
 type MessageHandler func(client *Client, message Message)
 
-func NewClient(uri *url.URL, client_id string, prefix string) (*Client, error) {
+func NewClient(uri *url.URL, clientID string, prefix string) (*Client, error) {
 	client := Client{
-		URI:      uri,
-		ClientID: client_id,
-		Prefix:   prefix,
+		URI:           uri,
+		ClientID:      clientID,
+		Prefix:        prefix,
+		subscriptions: make(map[string]subscriptionInfo),
 	}
-	opts := createClientOptions(client.URI, client.ClientID)
+	opts := createClientOptions(&client)
 
 	opts.SetWill(fmt.Sprintf("%s/device/status", client.Prefix), "offline", 1, true)
 	err := client.connect(opts)
@@ -60,8 +69,7 @@ func NewClient(uri *url.URL, client_id string, prefix string) (*Client, error) {
 func (client *Client) connect(opts *mqtt.ClientOptions) error {
 	client.connection = mqtt.NewClient(opts)
 	token := client.connection.Connect()
-	for !token.WaitTimeout(3 * time.Second) {
-	}
+	token.Wait()
 	if err := token.Error(); err != nil {
 		return err
 	}
@@ -122,31 +130,39 @@ func (client *Client) PublishJSON(topic string, val interface{}) error {
 
 func (client *Client) Subscribe(topic string, qos byte, callback MessageHandler) error {
 	full_topic := fmt.Sprintf("%s/%s", client.Prefix, topic)
+
+	// Store subscription info for automatic re-subscription on reconnect
+	client.subMutex.Lock()
+	client.subscriptions[full_topic] = subscriptionInfo{
+		qos:      qos,
+		callback: callback,
+	}
+	client.subMutex.Unlock()
+
 	token := client.connection.Subscribe(full_topic, qos, func(_ mqtt.Client, msg mqtt.Message) {
 		callback(client, msg)
 	})
-	for !token.WaitTimeout(3 * time.Second) {
-	}
+	token.Wait()
 	if err := token.Error(); err != nil {
 		return err
 	}
 	return nil
 }
 
-func createClientOptions(uri *url.URL, clientId string) *mqtt.ClientOptions {
+func createClientOptions(client *Client) *mqtt.ClientOptions {
 	opts := mqtt.NewClientOptions()
 
-	port := uri.Port()
+	port := client.URI.Port()
 	if port == "" {
-		if uri.Scheme == "mqtts" {
+		if client.URI.Scheme == "mqtts" {
 			port = "8883"
 		} else {
 			port = "1883"
 		}
 	}
 
-	if uri.Scheme == "mqtts" {
-		query := uri.Query()
+	if client.URI.Scheme == "mqtts" {
+		query := client.URI.Query()
 		tlsCert := query.Get("tls_cert")
 		tlsKey := query.Get("tls_key")
 		caCert := query.Get("tls_cacert")
@@ -177,15 +193,15 @@ func createClientOptions(uri *url.URL, clientId string) *mqtt.ClientOptions {
 		}
 
 		opts.SetTLSConfig(tlsConfig)
-		opts.AddBroker(fmt.Sprintf("ssl://%s:%s", uri.Hostname(), port))
+		opts.AddBroker(fmt.Sprintf("ssl://%s:%s", client.URI.Hostname(), port))
 	} else {
-		opts.AddBroker(fmt.Sprintf("tcp://%s:%s", uri.Hostname(), port))
+		opts.AddBroker(fmt.Sprintf("tcp://%s:%s", client.URI.Hostname(), port))
 	}
 
-	opts.SetUsername(uri.User.Username())
-	password, _ := uri.User.Password()
+	opts.SetUsername(client.URI.User.Username())
+	password, _ := client.URI.User.Password()
 	opts.SetPassword(password)
-	opts.SetClientID(clientId)
+	opts.SetClientID(client.ClientID)
 	opts.SetKeepAlive(30 * time.Second)
 	opts.SetMaxReconnectInterval(10 * time.Second)
 	opts.SetAutoReconnect(true)
@@ -195,6 +211,30 @@ func createClientOptions(uri *url.URL, clientId string) *mqtt.ClientOptions {
 	})
 	opts.SetReconnectingHandler(func(_ mqtt.Client, _ *mqtt.ClientOptions) {
 		log.Warn("mqtt reconnecting")
+	})
+	opts.SetOnConnectHandler(func(_ mqtt.Client) {
+		log.Info("mqtt connected")
+
+		// Republish online status on every connection
+		client.connection.Publish(fmt.Sprintf("%s/device/status", client.Prefix), 1, true, "online")
+
+		// Restore all subscriptions after reconnection
+		client.subMutex.RLock()
+		defer client.subMutex.RUnlock()
+
+		for fullTopic, sub := range client.subscriptions {
+			// Capture loop variable for closure
+			subInfo := sub
+			token := client.connection.Subscribe(fullTopic, subInfo.qos, func(_ mqtt.Client, msg mqtt.Message) {
+				subInfo.callback(client, msg)
+			})
+			token.Wait()
+			if err := token.Error(); err != nil {
+				log.Errorf("failed to resubscribe to %s: %v", fullTopic, err)
+			} else {
+				log.Infof("resubscribed to %s", fullTopic)
+			}
+		}
 	})
 
 	return opts

@@ -66,6 +66,74 @@ on the unit.
 If an MQTT prefix is not specified, messages will be published to the `nbe/<serial>`
 topic.
 
+## Development
+
+### Building from Source
+
+```bash
+# Build binary
+go build -o boiler-mate ./cmd/boiler-mate
+
+# Or use Make
+make binary
+```
+
+### Running Tests
+
+```bash
+# Run unit tests (fast)
+go test ./...
+make test
+
+# Run integration tests (requires Docker)
+make test-integration
+
+# Run all tests with coverage
+make test-coverage
+
+# Run tests with race detection
+make test-race
+```
+
+### Project Structure
+
+```
+boiler-mate/
+├── cmd/boiler-mate/     # Main application
+├── config/              # Configuration management
+├── homeassistant/       # Home Assistant MQTT discovery
+├── monitor/             # Data monitoring and publishing
+├── mqtt/                # MQTT client wrapper
+├── nbe/                 # NBE protocol implementation
+└── test/integration/    # Integration tests
+```
+
+See [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) for detailed documentation.
+
+## CI/CD
+
+[![CI/CD](https://github.com/mlipscombe/boiler-mate/workflows/CI%2FCD/badge.svg)](https://github.com/mlipscombe/boiler-mate/actions)
+
+The project uses GitHub Actions for continuous integration and deployment:
+
+- **Unit Tests** - Run on every push and PR
+- **Integration Tests** - Full system tests with real MQTT broker
+- **Build Verification** - Ensures code compiles
+- **Linting** - Code quality checks
+- **Docker Multi-Arch Builds** - Automatic builds for amd64 and arm64
+
+See [.github/workflows/README.md](.github/workflows/README.md) for pipeline details.
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run tests: `make test-all`
+5. Submit a pull request
+
+All PRs must pass CI/CD checks before merging.
+
 ## Thanks & Acknowledgement
 
 Special thanks to [Anders Nylund](https://github.com/motoz) for documenting the
