@@ -7,7 +7,7 @@ const navigation = [
     ['events', 'Events', '☷'], ['messages', 'Messages', '▤'], ['notifications', 'Notifications', '◇'],
   ]],
   ['Controller', [
-    ['boiler', 'Boiler', '▣'], ['fuel', 'Hopper & feed', '▧'], ['hot-water', 'Hot water', '◉'],
+    ['boiler', 'Boiler', '▣'], ['fuel', 'Hopper & feed', '▧'], ['hot-water', 'DHW', '◉'],
     ['weather', 'Weather', '☁'], ['solar', 'Solar', '☼'], ['system', 'System', '⚙'],
   ]],
   ['Resources', [['help', 'Help & information', 'ⓘ']]],
@@ -20,7 +20,7 @@ const groups = {
   fuel: ['Hopper & feed', 'Fuel level, pellet feed, and auger calibration.', [
     ['hopper','Hopper'], ['auger','Augers & external feed'], ['vacuum','Vacuum transport'],
   ]],
-  'hot-water': ['Hot water', 'Cylinder temperature, hot water output, and weekly schedule.', [['hot_water','Temperature & schedule','temperature-and-schedule']]],
+  'hot-water': ['DHW', 'Domestic hot water temperature, output, and weekly schedule.', [['hot_water','Temperature & schedule','temperature-and-schedule']]],
   weather: ['Weather', 'Outdoor readings and weather compensation for both heating circuits.', [
     ['weather','Heating circuit 1','circuit-1'], ['weather2','Heating circuit 2','circuit-2'],
   ]],
@@ -33,19 +33,49 @@ const monitorPages = {
 };
 const consumptionPeriods = [['hours','Hourly'],['days','Daily'],['months','Monthly'],['years','Yearly']];
 const labels = {
-  boiler_temp: ['Boiler temperature','°C'], boiler_ref: ['Boiler target','°C'],
-  smoke_temp: ['Flue gas','°C'], return_temp: ['Return temperature','°C'],
-  shaft_temp: ['Drop shaft','°C'], dhw_temp: ['Hot water','°C'], dhw_ref: ['Hot water target','°C'],
-  oxygen: ['Oxygen','%'], oxygen_ref: ['Oxygen target','%'], power_kw: ['Heat output','kW'],
-  power_pct: ['Burner power','%'], content: ['Pellets remaining','kg'], distance: ['Hopper distance','cm'],
-  external_temp: ['Outdoor sensor','°C'], outdoor_temp: ['Outdoor weather','°C'], wind_speed: ['Wind speed','m/s'],
-  wind_direction: ['Wind direction',''], air_pressure: ['Atmospheric pressure','hPa'], cloud_level: ['Cloud cover','%'],
-  humidity: ['Relative humidity','%'], forward_temp: ['Circuit 1 supply','°C'], forward2_temp: ['Circuit 2 supply','°C'],
-  sun_temp: ['Solar collector','°C'], sun2_temp: ['Second collector','°C'], sun_dhw_temp: ['Solar tank','°C'],
-  sun_power_kw: ['Solar output','kW'], sun_pumpspeed: ['Solar pump speed','%'], fan_speed: ['Fan speed','%'],
-  total_consumption_24hours: ['Pellets in the last 24 hours','kg'], dhw_consumption_24hours: ['Hot-water fuel in the last 24 hours','kg'],
-  internet_uptime: ['Controller online time','%'], program_version: ['Firmware version',''], photo_level: ['Flame sensor',''],
+  boiler_temp: ['Boiler temperature','°C'], boiler_ref: ['Boiler target temperature','°C'],
+  smoke_temp: ['Chimney/smoke','°C'], return_temp: ['Boiler return','°C'], shaft_temp: ['Drop shaft','°C'],
+  dhw_temp: ['DHW temperature','°C'], dhw_ref: ['DHW target temperature','°C'], dhw_valve_state: ['DHW output',''],
+  oxygen: ['Oxygen','%'], oxygen_ref: ['Oxygen target','%'],
+  corr_low: ['O2 low regulation','%'], corr_medium: ['O2 mid regulation','%'], corr_high: ['O2 high regulation','%'],
+  power_kw: ['Power output','kW'], power_pct: ['Power','%'], photo_level: ['Photo sensor (light)','lx'],
+  fan_speed: ['Fan speed','%'], internet_uptime: ['Online time','%'], flow1: ['Flow','L/h'],
+  content: ['Pellets remaining','kg'], distance: ['Distance to pellets','cm'], pressure: ['Air pressure','bar'],
+  auger_capacity: ['Auger capacity','g'], kw_min: ['Power 10%','kW'], kw_max: ['Power 100%','kW'],
+  consumption_total: ['Consumption total','kg'], trip1: ['Trip 1','kg'], trip2: ['Trip 2','kg'],
+  feed_low: ['Auger low','%'], feed_medium: ['Auger mid','%'], feed_high: ['Auger high','%'],
+  external_temp: ['External temp.','°C'], outdoor_temp: ['Outdoor weather','°C'],
+  mean_out_temp: ['Average temperature','°C'], mean2_out_temp: ['Average temp. zone 2','°C'],
+  chill_out: ['Chill','°C'], chill2_out: ['Chill zone 2','°C'],
+  wind_speed: ['Wind speed','m/s'], wind_direction: ['Wind direction',''], air_pressure: ['Air pressure','hPa'],
+  cloud_level: ['Clouds','%'], clouds: ['Clouds','%'], humidity: ['Humidity','%'],
+  forward_temp: ['Zone 1 T6','°C'], forward2_temp: ['Zone 2','°C'],
+  forward_ref: ['Zone 1 flow temperature target','°C'], forward2_ref: ['Zone 2 flow temperature target','°C'],
+  sun_temp: ['Sun panel','°C'], sun2_temp: ['Sun panel 2','°C'], sun_dhw_temp: ['DHW bottom','°C'],
+  sun_power_kw: ['Sun power','kW'], sun_pumpspeed: ['Sun pump (on/off)','%'],
+  sun_pump_state: ['Sun pump state',''], sun_surplus_temp: ['Solar surplus temperature','°C'],
+  t6_temp: ['T6 temperature','°C'], t7_temp: ['T7 temperature','°C'],
+  total_consumption_24hours: ['Consumption last 24 h.','kg'], dhw_consumption_24hours: ['DHW consumption last 24 h.','kg'],
+  dhw_part_24hours: ['Heat/DHW distribution 24h','%'], program_version: ['Firmware version',''],
+
+  // The advanced view is flat, so qualify names that StokerCloud repeats in groups.
+  boiler_setpoint: ['Wanted boiler temp.','°C'], boiler_diff: ['Boiler difference','°C'], boiler_diffsum: ['Boiler diff sum','°C'],
+  boiler_gain_i: ['Power gain I',''], boiler_gain_p: ['Power gain P',''],
+  boiler_part_i: ['Boiler power gain I','%'], boiler_part_p: ['Boiler power gain P','%'],
+  boiler_power_actual: ['Actual boiler power','%'], boiler_power_kw: ['Boiler power','kW'], boiler_power_total: ['Total boiler power','%'],
+  dhw_boiler_setpoint: ['Wanted DHW boiler temp.','°C'], dhw_diff: ['DHW difference','°C'], dhw_diffsum: ['DHW diff sum','°C'],
+  dhw_gain_i: ['DHW gain I',''], dhw_gain_p: ['DHW gain P',''],
+  dhw_part_i: ['DHW power gain I','%'], dhw_part_p: ['DHW power gain P','%'],
+  dhw_power_actual: ['Actual DHW power','%'], dhw_power_kw: ['DHW power','kW'], dhw_power_total: ['Total DHW power','%'],
+  o2_setpoint: ['Wanted O2','%'], o2_diff: ['O2 difference','%'], o2_diffsum: ['O2 diff sum','%'],
+  o2_gain_i: ['O2 gain I',''], o2_gain_p: ['O2 gain P',''],
+  o2_gain_pellets: ['Pellet gain P',''], o2_gain_pellets_i: ['Pellet gain I',''],
+  o2_part_i: ['Air change gain I','%'], o2_part_p: ['Air change gain P','%'],
+  o2_power_actual: ['Actual O2','%'], o2_power_total: ['Total O2 change','%'], o2_power_max: ['Max. O2 change','%'],
+  o2_corr_low: ['Corr. fuel low','%'], o2_corr_medium: ['Corr. fuel mid','%'], o2_corr_high: ['Corr. fuel high','%'],
+  auger_run: ['Auger runtime','s'], auger_pause: ['Auger pause time','s'],
 };
+const labelCapitalization = {dhw:'DHW',o2:'O2',kw:'kW',i:'I',p:'P',rpm:'RPM',id:'ID',dl:'DL'};
 const colors = ['#345ece','#118576','#b25e35','#a65095','#5c7e36','#4685ad','#ab7f2e','#64748b'];
 const days = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
 const datetime = new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle:'short'});
@@ -82,7 +112,12 @@ function saveLocal(key,value) {
   try { localStorage.setItem('boilermate.'+key,JSON.stringify(value)); } catch {}
 }
 function textLabel(key) {
-  return labels[key]?.[0] ?? key.replaceAll('_',' ').replace(/^./,ch=>ch.toUpperCase());
+  const label=labels[key]?.[0];
+  if (label) return label;
+  return key.split('_').map((word,index)=>{
+    if (Object.hasOwn(labelCapitalization,word)) return labelCapitalization[word];
+    return index===0?word.charAt(0).toUpperCase()+word.slice(1):word;
+  }).join(' ');
 }
 function display(value) {
   if (value == null || value === '') return '—';
@@ -194,7 +229,7 @@ function updateOverview() {
     ['Fuel hopper',remaining!=null&&remaining<0 ? 'Below minimum' : withUnit(remaining,'kg'),withUnit(signal('advanced_data.total_consumption_24hours'),'kg')+' used in 24 h','#fuel'],
     ['Boiler',withUnit(output,'kW'),withUnit(signal('operating_data.power_pct'),'%')+' burner output','#boiler'],
     ['Heating circuit',withUnit(returnTemp,'°C'),'Return water','#weather'],
-    ['Hot water',water==null?'No reading':withUnit(water,'°C'),'Cylinder sensor','#hot-water'],
+    ['DHW',water==null?'No reading':withUnit(water,'°C'),'Cylinder sensor','#hot-water'],
   ];
   live.replaceChildren(dom('section',{class:'overview-system','aria-label':'Current boiler state'},
     dom('div',{class:'system-main'},
@@ -404,7 +439,7 @@ function consumption(period,token) {
       const aggregate=data.total.reduce((sum,value)=>sum+value,0);
       const dhw=data.hotWater?.reduce((sum,value)=>sum+value,0);
       output.replaceChildren(dom('div',{class:'grid metrics'},
-        stat('Period total',aggregate,'kg'),stat('Hot water',dhw,'kg'),stat('Controller counter',data.counter?.[0],'kg')),
+        stat('Period total',aggregate,'kg'),stat('DHW',dhw,'kg'),stat('Controller counter',data.counter?.[0],'kg')),
         dom('div',{class:'table-scroll'},consumptionTable(data)));
     } catch(error) {if(token===generation)output.replaceChildren(empty(error.message),btn('Try again',load));}
   };
@@ -419,7 +454,7 @@ function stat(label,value,unit) {
 function consumptionTable(data) {
   const max = Math.max(...data.total,1);
   return dom('table',{},dom('thead',{},dom('tr',{},
-    ['Period','Total (kg)','Hot water (kg)','Heating (kg)'].map(name=>dom('th',{scope:'col'},name)))),
+    ['Period','Total (kg)','DHW (kg)','Heating (kg)'].map(name=>dom('th',{scope:'col'},name)))),
     dom('tbody',{},data.total.map((value,i)=>{
       const hot=data.hotWater?.[i];
       const heat=hot==null ? null : Math.max(0,value-hot);
