@@ -95,6 +95,8 @@ let toastTimer = 0;
 let noticeSource = null;
 let noticePoll = 0;
 let lastDesktopNotice = null;
+let pushSetup = null;
+let pushSubscription = null;
 let noticeFilter = saved('noticeFilter', ['alarm','info','connection']);
 let chosenSignals = saved('signals',['operating_data.boiler_temp','operating_data.boiler_ref']);
 let chosenMetrics = saved('metrics',['operating_data.external_temp','operating_data.air_flow'])
@@ -710,29 +712,134 @@ function activity(token,initialFilter,notificationsOpen) {
   load('reset');
 }
 function desktopNotifications(open) {
-  const desktop=btn(typeof Notification!=='undefined'&&Notification.permission==='granted'?'Desktop notifications enabled':'Enable desktop notices',async ()=>{
-    if(typeof Notification==='undefined'||!window.isSecureContext){toast('Desktop notices need HTTPS or a localhost connection.');return;}
-    const permission=await Notification.requestPermission();
-    toast(permission==='granted'?'Desktop notices are enabled.':'Your browser did not grant notification access.');
-    if(permission==='granted'){
-      desktop.textContent='Desktop notifications enabled';
+  const supportsPush=webPushAvailable();
+  const description=dom('p');
+  let setup=null;
+  const desktop=btn('',async()=>{
+    desktop.disabled=true;
+    inputs.disabled=true;
+    try {
+      if(supportsPush){
+        if(pushEnabled()&&await activePushSubscription())await disableWebPush();
+        else await enableWebPush(setup);
+      }else if(!desktopNoticesAllowed()){
+        if(typeof Notification==='undefined'||!window.isSecureContext)throw new Error('Desktop notices need a supported browser and HTTPS.');
+        const permission=await Notification.requestPermission();
+        if(permission!=='granted')throw new Error('Your browser did not grant notification access.');
+      }
+    }catch(error){
+      toast(error.message);
+    }finally{
+      inputs.disabled=false;
+      updateControls();
       connectDesktopNotices();
     }
   },'primary');
+  const updateControls=()=>{
+    if(supportsPush){
+      const active=pushEnabled();
+      description.textContent=active?'Notices can arrive even after you close the dashboard tab.':'Enable desktop notices to receive them even with the dashboard tab closed.';
+      desktop.textContent=active?'Disable closed-tab notices':desktopNoticesAllowed()?'Enable closed-tab notices':'Enable desktop notices';
+      desktop.disabled=!setup;
+    }else{
+      description.textContent='Choose which notices to show while the dashboard tab is open, including in the background.';
+      desktop.textContent=desktopNoticesAllowed()?'Desktop notifications enabled':'Enable desktop notices';
+      desktop.disabled=desktopNoticesAllowed();
+    }
+  };
   const options=[['alarm','Boiler alarms'],['info','Controller information'],['connection','Connection interruptions']];
-  const inputs=dom('div',{class:'signal-chooser'},options.map(([kind,label])=>dom('label',{},
-    dom('input',{type:'checkbox',checked:noticeFilter.includes(kind),onchange:event=>{
-      noticeFilter=event.target.checked?[...noticeFilter,kind]:noticeFilter.filter(item=>item!==kind);
-      saveLocal('noticeFilter',noticeFilter);
+  const inputs=dom('fieldset',{class:'signal-chooser','aria-label':'Desktop notice categories'},options.map(([kind,label])=>dom('label',{},
+    dom('input',{type:'checkbox',checked:noticeFilter.includes(kind),onchange:async event=>{
+      const checkbox=event.target;
+      const kinds=checkbox.checked?[...noticeFilter,kind]:noticeFilter.filter(item=>item!==kind);
+      inputs.disabled=true;
+      try {
+        if(pushEnabled())await saveWebPush(await activePushSubscription(),kinds);
+        noticeFilter=kinds;
+        saveLocal('noticeFilter',kinds);
+      }catch(error){
+        checkbox.checked=noticeFilter.includes(kind);
+        toast(error.message);
+      }finally{
+        inputs.disabled=false;
+      }
     }}),label)));
-  return dom('details',{open},dom('summary',{},'Desktop notifications'),
-    dom('p',{},'Choose which notices to show while the dashboard tab is open, including in the background.'),inputs,desktop);
+  const panel=dom('details',{open},dom('summary',{},'Desktop notifications'),description,inputs,desktop);
+  const prepare=async()=>{
+    if(!supportsPush||setup)return;
+    try {
+      const config=await prepareWebPush();
+      if(pushEnabled())await activePushSubscription();
+      setup=config;
+    }catch{
+      description.textContent='Could not load desktop notification settings. Reopen this panel to retry.';
+      return;
+    }
+    updateControls();
+  };
+  panel.addEventListener('toggle',()=>{if(panel.open)prepare();});
+  updateControls();
+  if(open)prepare();
+  return panel;
 }
 function desktopNoticesAllowed() {
   return typeof Notification!=='undefined'&&Notification.permission==='granted';
 }
+function webPushAvailable() {
+  return window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+function pushEnabled() {
+  return webPushAvailable() && saved('closedTabNotices',Boolean(pushSubscription));
+}
+function prepareWebPush() {
+  if(!pushSetup){
+    const key=api('notifications/push-key');
+    const worker=navigator.serviceWorker.register('/notice-worker.js',{updateViaCache:'none'});
+    pushSetup=Promise.all([key,worker]).then(async([settings])=>({
+      key:Uint8Array.from(atob(settings.publicKey.replace(/-/g,'+').replace(/_/g,'/')),char=>char.charCodeAt(0)),
+      registration:await navigator.serviceWorker.ready,
+    })).catch(error=>{
+      pushSetup=null;
+      throw error;
+    });
+  }
+  return pushSetup;
+}
+async function activePushSubscription() {
+  const {registration}=await prepareWebPush();
+  const subscription=await registration.pushManager.getSubscription();
+  pushSubscription=subscription;
+  if(!subscription)saveLocal('closedTabNotices',false);
+  return subscription;
+}
+async function enableWebPush({registration,key}) {
+  // Start the subscription from the button click to preserve the browser’s user activation.
+  const subscription=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:key});
+  try {
+    await saveWebPush(subscription,noticeFilter);
+  }catch(error){
+    await subscription.unsubscribe().catch(()=>{});
+    throw error;
+  }
+  pushSubscription=subscription;
+  saveLocal('closedTabNotices',true);
+  toast('Desktop notices are enabled, even with the tab closed.');
+}
+async function disableWebPush() {
+  const {endpoint}=pushSubscription;
+  await pushSubscription.unsubscribe();
+  pushSubscription=null;
+  saveLocal('closedTabNotices',false);
+  await api('notifications/push',{method:'DELETE',body:JSON.stringify({endpoint})});
+  toast('Closed-tab notices are disabled.');
+}
+async function saveWebPush(subscription,kinds) {
+  if(!subscription)throw new Error('Enable closed-tab notices again before changing their categories.');
+  const {endpoint,keys}=subscription.toJSON();
+  await api('notifications/push',{method:'PUT',body:JSON.stringify({endpoint,keys,kinds})});
+}
 function deliverDesktopNotices(rows,cursor) {
-  if(!desktopNoticesAllowed()){
+  if(!desktopNoticesAllowed()||pushEnabled()){
     stopDesktopNotices();
     lastDesktopNotice=null;
     return;
@@ -772,7 +879,7 @@ function stopDesktopNotices() {
   noticePoll=0;
 }
 function connectDesktopNotices() {
-  if(!desktopNoticesAllowed()){
+  if(!desktopNoticesAllowed()||pushEnabled()){
     stopDesktopNotices();
     lastDesktopNotice=null;
     return;
@@ -997,6 +1104,11 @@ function connectPageStreams() {
   connectWhileVisible();
   connectDesktopNotices();
 }
+if(pushEnabled())activePushSubscription().then(connectDesktopNotices).catch(()=>{});
+window.addEventListener('storage',event=>{
+  if(event.key==='boilermate.closedTabNotices')connectDesktopNotices();
+  if(event.key==='boilermate.noticeFilter')noticeFilter=saved('noticeFilter',noticeFilter);
+});
 document.addEventListener('visibilitychange',connectPageStreams);
 document.addEventListener('freeze',stopDesktopNotices);
 document.addEventListener('resume',connectDesktopNotices);

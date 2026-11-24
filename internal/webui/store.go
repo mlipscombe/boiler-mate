@@ -71,6 +71,22 @@ func openStore(ctx context.Context, dir string) (*store, error) {
 			message TEXT NOT NULL,
 			seen INTEGER NOT NULL DEFAULT 0
 		);
+		CREATE TABLE IF NOT EXISTS push_keys (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			private_key TEXT NOT NULL,
+			public_key TEXT NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS push_subscriptions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			endpoint TEXT NOT NULL UNIQUE,
+			auth TEXT NOT NULL,
+			p256dh TEXT NOT NULL,
+			kinds INTEGER NOT NULL,
+			cursor INTEGER NOT NULL,
+			version INTEGER NOT NULL DEFAULT 1,
+			failures INTEGER NOT NULL DEFAULT 0,
+			retry_at INTEGER NOT NULL DEFAULT 0
+		);
 	`)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("initialize history: %w", err), db.Close())

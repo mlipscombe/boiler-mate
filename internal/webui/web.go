@@ -35,6 +35,7 @@ type UI struct {
 	store      *store
 	logger     *slog.Logger
 	serial     string
+	push       *webPush
 
 	settingsMu   sync.Mutex
 	mu           sync.RWMutex
@@ -59,8 +60,13 @@ func New(ctx context.Context, logger *slog.Logger, boiler controller, serial, da
 	if err != nil {
 		return nil, err
 	}
+	push, err := newWebPush(ctx, store)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("initialize web push: %w", err), store.db.Close())
+	}
 	return &UI{
 		controller: boiler, write: write, store: store, logger: logger, serial: serial,
+		push:      push,
 		snapshots: make(map[string]snapshot), lastSample: make(map[string]time.Time),
 		changed: make(chan struct{}), eventChanged: make(chan struct{}),
 	}, nil
@@ -126,8 +132,12 @@ func (ui *UI) Observe(ctx context.Context, topic string, values map[string]any) 
 	}
 }
 
-// Run records controller notices and maintains local history.
+// Run records controller notices, delivers web push, and maintains local history.
 func (ui *UI) Run(ctx context.Context) {
+	var workers sync.WaitGroup
+	workers.Go(func() { ui.runWebPush(ctx) })
+	defer workers.Wait()
+
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	var pruned time.Time
@@ -205,6 +215,9 @@ func (ui *UI) Handler() http.Handler {
 	router.HandleFunc("GET /api/events", ui.getEvents)
 	router.HandleFunc("GET /api/notifications", ui.getNotices)
 	router.HandleFunc("GET /api/notifications/stream", ui.streamNotices)
+	router.HandleFunc("GET /api/notifications/push-key", ui.getPushKey)
+	router.HandleFunc("PUT /api/notifications/push", ui.putPushSubscription)
+	router.HandleFunc("DELETE /api/notifications/push", ui.deletePushSubscription)
 	router.HandleFunc("POST /api/notifications/{id}/read", ui.markRead)
 	router.HandleFunc("GET /api/settings/{group}", ui.getSettings)
 	router.HandleFunc("PUT /api/settings/{group}/{key}", ui.putSetting)
