@@ -39,6 +39,20 @@ func TestLoadDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
+func TestWritesRequireOptIn(t *testing.T) {
+	args := []string{"--controller", "udp://1234:1234567890@boiler.local:8483"}
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{{"", false}, {"false", false}, {"true", true}} {
+		t.Setenv("BOILER_MATE_ENABLE_WRITES", tc.value)
+		cfg, err := Load(args, io.Discard)
+		if err != nil || cfg.EnableWrites != tc.want {
+			t.Fatalf("writes with opt-in %q = %t, want %t (%v)", tc.value, cfg.EnableWrites, tc.want, err)
+		}
+	}
+}
+
 func TestLoadRedactsURLs(t *testing.T) {
 	for _, args := range [][]string{
 		{"--controller", "udp://1234:secret@%bogus:8483"},

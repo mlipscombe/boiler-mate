@@ -19,7 +19,7 @@ go build -o boiler-mate ./cmd/boiler-mate
   --mqtt 'mqtt://broker.local:1883'
 ```
 
-Set controller and broker URLs through environment variables to keep passwords out of the command line. A controller password enables settings writes. Reads work with the serial alone. The historical `tcp://` controller URI spelling is accepted and uses UDP.
+Set controller and broker URLs through environment variables to keep passwords out of the command line. Reads work with the serial alone. Set `BOILER_MATE_ENABLE_WRITES=true` and configure a controller PIN to enable dashboard and MQTT commands. The historical `tcp://` controller URI spelling is accepted and uses UDP.
 
 | Flag | Environment variable | Default |
 | --- | --- | --- |
@@ -43,7 +43,7 @@ The dashboard test branch publishes `ghcr.io/mlipscombe/boiler-mate:dashboard-te
 ./boiler-mate --web-bind 127.0.0.1:8080 --web-data ./boiler-mate-data
 ```
 
-Open `http://127.0.0.1:8080`. The dashboard reads and writes settings when the controller URI contains its PIN. Omitting the PIN gives a read-only controller session.
+Open `http://127.0.0.1:8080`. Boiler Mate defaults to read-only, even when the controller URI contains a PIN. Set `BOILER_MATE_ENABLE_WRITES=true` to opt in to dashboard and MQTT writes. The controller still requires its PIN to accept commands.
 
 Boiler Mate delegates access control to its reverse proxy. Protect the entire dashboard, including `/api/`, behind [Authentik forward auth](https://docs.goauthentik.io/add-secure-apps/providers/proxy/forward_auth) or equivalent, and keep the web listener private to that proxy. In a container, mount a persistent volume at `/data` owned by UID 10001 and set `BOILER_MATE_WEB_BIND=0.0.0.0:8080` to enable the listener.
 

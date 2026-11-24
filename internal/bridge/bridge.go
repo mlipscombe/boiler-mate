@@ -38,13 +38,22 @@ func Run(parent context.Context, cfg config.Config, logger *slog.Logger) error {
 	logger.Info("Controller connected", "host", cfg.Controller.Host, "serial", boiler.Serial)
 	prefix := mqttPrefix(cfg.MQTT, boiler.Serial)
 
-	queue := make(commands, 32)
+	pin, _ := cfg.Controller.User.Password()
+	writesEnabled := cfg.EnableWrites && pin != ""
+	if cfg.EnableWrites && !writesEnabled {
+		logger.Warn("Boiler writes require a controller PIN")
+	}
+
+	var queue commands
+	if writesEnabled {
+		queue = make(commands, 32)
+	}
 	httpErrors := make(chan error, 1)
 	var workers sync.WaitGroup
 	var ui *webui.UI
 	if cfg.WebBind != "false" {
 		var write webui.WriteFunc
-		if pin, _ := cfg.Controller.User.Password(); pin != "" {
+		if writesEnabled {
 			write = queue.write
 		}
 		ui, err = webui.New(ctx, logger, boiler, boiler.Serial, cfg.WebData, write)
@@ -67,12 +76,14 @@ func Run(parent context.Context, cfg config.Config, logger *slog.Logger) error {
 		cancel()
 		workers.Wait()
 	}()
-	if err := queue.subscribe(ctx, logger, client, prefix); err != nil {
-		return err
+	if writesEnabled {
+		if err := queue.subscribe(ctx, logger, client, prefix); err != nil {
+			return err
+		}
+		workers.Go(func() {
+			queue.run(ctx, logger, boiler)
+		})
 	}
-	workers.Go(func() {
-		queue.run(ctx, logger, boiler)
-	})
 	if err := client.PublishMany("device", map[string]any{"serial": boiler.Serial, "ip_address": boiler.IPAddress}); err != nil {
 		return err
 	}

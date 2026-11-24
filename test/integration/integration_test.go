@@ -25,6 +25,12 @@ func TestBridgeWithMosquitto(t *testing.T) {
 	if os.Getenv("INTEGRATION_TESTS") != "1" {
 		t.Skip("set INTEGRATION_TESTS=1 to run with Mosquitto")
 	}
+	t.Run("PIN alone is read-only", func(t *testing.T) { verifyBridge(t, false) })
+	t.Run("write opt-in exposes controls", func(t *testing.T) { verifyBridge(t, true) })
+}
+
+func verifyBridge(t *testing.T, enableWrites bool) {
+	t.Helper()
 	broker := os.Getenv("TEST_MQTT_URL")
 	if broker == "" {
 		broker = "mqtt://127.0.0.1:1883"
@@ -71,8 +77,8 @@ func TestBridgeWithMosquitto(t *testing.T) {
 	web := unusedAddress(t)
 	cfg := config.Config{
 		Bind: metrics, WebBind: web, WebData: t.TempDir(),
-		Controller: &url.URL{Scheme: "udp", Host: device.GetAddr()},
-		MQTT:       mqttURI, HADiscovery: true,
+		Controller: &url.URL{Scheme: "udp", Host: device.GetAddr(), User: url.UserPassword(serial, "1234567890")},
+		MQTT:       mqttURI, HADiscovery: true, EnableWrites: enableWrites,
 	}
 	done := make(chan error, 1)
 	go func() {
@@ -131,8 +137,8 @@ func TestBridgeWithMosquitto(t *testing.T) {
 		t.Error("embedded dashboard not found")
 	}
 	var data struct{ Online, Control bool }
-	if err := json.Unmarshal([]byte(get(t, httpClient, web, "/api/status")), &data); err != nil || !data.Online || data.Control {
-		t.Fatalf("expected a live read-only dashboard, got %+v (%v)", data, err)
+	if err := json.Unmarshal([]byte(get(t, httpClient, web, "/api/status")), &data); err != nil || !data.Online || data.Control != enableWrites {
+		t.Fatalf("expected a live dashboard with controller writes %t, got %+v (%v)", enableWrites, data, err)
 	}
 	if got := get(t, httpClient, web, "/api/history?series=operating_data.boiler_temp"); !strings.Contains(got, `"value":62.5`) {
 		t.Errorf("temperature history missing: %s", got)

@@ -31,13 +31,14 @@ import (
 )
 
 type Config struct {
-	LogLevel    slog.Level
-	Bind        string
-	Controller  *url.URL
-	MQTT        *url.URL
-	HADiscovery bool
-	WebBind     string
-	WebData     string
+	LogLevel     slog.Level
+	Bind         string
+	Controller   *url.URL
+	MQTT         *url.URL
+	HADiscovery  bool
+	EnableWrites bool
+	WebBind      string
+	WebData      string
 }
 
 func Load(args []string, output io.Writer) (Config, error) {
@@ -96,6 +97,7 @@ func Load(args []string, output io.Writer) (Config, error) {
 		return cfg, errors.New("web data directory is required")
 	}
 	cfg.LogLevel = parseLevel(*logLevel)
+	cfg.EnableWrites = lookupEnvOrBool("BOILER_MATE_ENABLE_WRITES", false)
 	return cfg, nil
 }
 

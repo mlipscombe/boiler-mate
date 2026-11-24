@@ -164,7 +164,7 @@ function updateOverview() {
   if (!live) return;
   const op = snapshot('operating_data');
   const blocked = !status.online ? 'Waiting for a live controller reading.'
-    : !status.control ? 'Read only. A controller PIN enables actions.'
+    : !status.control ? 'Controller writes are disabled.'
     : !['ON','OFF'].includes(op.state_on) ? 'Waiting for the boiler state.' : '';
   const command = action => async ()=>{
     const label = action==='start'?'Start boiler':'Stop boiler';
@@ -635,7 +635,7 @@ function timerEditor(group,fields,canEdit,reload) {
 function helpPage() {
   const faqs=[
     ['Where do readings come from?','Boiler Mate reads one NBE controller directly over your local network. A controller can omit signals for optional hardware.'],
-    ['Why is the interface read only?','A controller password enables writes. Controls pause when readings become stale and return when the controller responds.'],
+    ['Why is the interface read only?','Writes require BOILER_MATE_ENABLE_WRITES=true and a controller PIN. Controls pause when readings become stale.'],
     ['How are charts and consumption stored?','Charts are recorded by this instance and require a persistent data directory. Pellet consumption periods come from the controller itself.'],
     ['How do schedules work?','Boiler and hot-water schedules are stored in the controller and follow its clock. Change the relevant schedule enable setting after reviewing the weekly blocks.'],
     ['What do controller statuses mean?','Statuses describe the current operating stage or an alarm. Open Messages for controller information and Events for the local activity log. Address the cause at the boiler before resetting an alarm.'],
