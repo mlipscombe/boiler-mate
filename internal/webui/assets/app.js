@@ -82,6 +82,7 @@ const datetime = new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle
 const shorttime = new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'});
 const numeric = new Intl.NumberFormat(undefined,{maximumFractionDigits:2});
 const main = document.querySelector('main');
+const chartRenderers = new Map();
 let status = {data:{},online:false,control:false};
 let page = '';
 let generation = 0;
@@ -90,7 +91,6 @@ let statusSource = null;
 let statusPoll = 0;
 let refreshPageHistory = null;
 let refreshPageEvents = null;
-let resizeChart = null;
 let toastTimer = 0;
 let noticeSource = null;
 let noticePoll = 0;
@@ -340,7 +340,12 @@ function renderCombustion(target) {
   };
   const oxygen = reading('Oxygen','oxygen','combustion-current');
   const oxygenTarget = status.online ? signal('operating_data.oxygen_ref') ?? signal('advanced_data.o2_setpoint') : null;
-  oxygen.append(dom('span',{class:'metric-label'},'Target '+withUnit(oxygenTarget,'%')));
+  if(snapshot('operating_data').state_on!=='OFF'&&oxygenTarget>0){
+    const label=oxygen.firstElementChild;
+    const header=dom('div',{class:'combustion-oxygen-label'});
+    label.replaceWith(header);
+    header.append(label,dom('span',{class:'combustion-target'},'Target '+withUnit(oxygenTarget,'%')));
+  }
   const compensation = [['Low','corr_low'],['Medium','corr_medium'],['High','corr_high']];
   target.replaceChildren(
     dom('section',{class:'combustion-reading combustion-oxygen','aria-label':'Oxygen and compensation'},
@@ -356,13 +361,15 @@ function renderCombustion(target) {
 function overview(token) {
   const live = dom('div',{id:'overview-live'});
   const chartBody = dom('div',{},empty('Loading temperature history…'));
+  const oxygenHistory = dom('div',{},empty('Loading O₂ history…'));
   const recent = dom('div',{},empty('Loading recent events…'));
   const metricsPanel = dom('div',{},empty('Waiting for telemetry…'));
   const customise = dom('details',{},dom('summary',{},'Choose overview readings'),metricsPanel,
     btn('Reset to default',()=>setMetrics(null),'secondary mt-2'));
   main.replaceChildren(heading('Pellet boiler'),
     dom('div',{class:'stack'},live,
-      card('Combustion',null,dom('div',{class:'combustion-grid',id:'overview-combustion'})),
+      card('Combustion',null,dom('div',{class:'combustion-grid',id:'overview-combustion'}),
+        dom('div',{class:'combustion-trend'},dom('h3',{},'O₂ · 24 hours'),oxygenHistory)),
       dom('div',{class:'grid split'},
         card('Temperature · 24 hours',null,chartBody,dom('a',{class:'home-link',href:'#charts'},'All charts')),
         card('Recent events',null,recent,dom('a',{class:'home-link',href:'#events'},'View all events'))),
@@ -377,17 +384,24 @@ function overview(token) {
   const renderChooser = ()=>chooseSignals(metricsPanel,chosenMetrics,setMetrics,{exclude:combustionReadings});
   customise.addEventListener('toggle',()=>{if(customise.open)renderChooser();});
   let historyRequest = 0;
-  const refreshChart = async(showError=false)=>{
+  const refreshCharts = async(showError=false)=>{
     const request = ++historyRequest;
-    try {
-      const data = await loadHistory(['operating_data.boiler_temp','operating_data.boiler_ref'],86400);
-      if(token===generation&&request===historyRequest) showChart(chartBody,data,86400,true);
-    } catch(error) {
-      if(showError&&token===generation&&request===historyRequest) chartBody.replaceChildren(empty(error.message));
-    }
+    const draw=async(target,pending,options)=>{
+      try {
+        const data=await pending;
+        if(token===generation&&request===historyRequest)showChart(target,data,86400,options);
+      }catch(error){
+        if(showError&&token===generation&&request===historyRequest)target.replaceChildren(empty(error.message));
+      }
+    };
+    await Promise.all([
+      draw(chartBody,loadHistory(['operating_data.boiler_temp','operating_data.boiler_ref'],86400),{size:'compact'}),
+      draw(oxygenHistory,api('history/combustion'),{size:'mini',maxGap:60,
+        names:{'operating_data.oxygen':'Actual','operating_data.oxygen_ref':'Target'}}),
+    ]);
   };
-  refreshPageHistory = refreshChart;
-  refreshChart(true);
+  refreshPageHistory = refreshCharts;
+  refreshCharts(true);
   let recentRequest = 0;
   let recentLoaded = false;
   const refreshRecent = async()=>{
@@ -499,20 +513,88 @@ function chartBounds(series) {
   const margin = Math.max((maxY-minY)*.07, .1);
   return {minX,maxX:maxX===minX?minX+1:maxX,minY:minY-margin,maxY:maxY+margin};
 }
-function showChart(target,data,duration,compact=false) {
+function showChart(target,data,duration,{size='',names={},maxGap=Infinity}={}) {
   const entries = Object.entries(data).filter(([,points])=>points.length);
-  resizeChart = null;
+  chartRenderers.delete(target);
   if(!entries.length){target.replaceChildren(empty('No readings in this period yet.'));return;}
+  const previous=target.querySelector('canvas.chart');
+  const focused=previous===document.activeElement;
+  const label=key=>names[key]??titleSignal(key);
   const units = new Set(entries.map(([key])=>unitSignal(key)));
   const mixed = units.size>1;
-  const visual = dom('canvas',{class:'chart'+(compact?' compact':''),role:'img','aria-label':'Line chart of '+entries.map(([key])=>titleSignal(key)).join(', ')});
+  const mini=size==='mini';
+  const visual = dom('canvas',{class:size?'chart '+size:'chart',role:'img',tabindex:0,
+    'aria-label':(mini?'O₂ history, 24 hours. ':'Line chart. ')+entries.map(([key])=>label(key)).join(', ')+'. Use the arrow keys to inspect values.'});
+  const cursor=dom('div',{class:'chart-cursor',hidden:true,'aria-hidden':'true'});
+  const tooltip=dom('div',{class:'chart-tooltip',hidden:true,role:'status'});
+  const plot=dom('div',{class:'chart-plot'},visual,cursor,tooltip);
+  const samples=new Map();
+  const swatch=(key,i)=>{
+    const dot=dom('span',{class:key.endsWith('_ref')?'dot dashed':'dot','aria-hidden':'true'});
+    dot.style.color=colors[i];
+    return dot;
+  };
+  entries.forEach(([key,points],i)=>{
+    for(const {time,value} of points){
+      if(!samples.has(time))samples.set(time,[]);
+      samples.get(time).push({key,value,i});
+    }
+  });
+  const times=[...samples.keys()].sort((a,b)=>a-b);
   const legend = dom('div',{class:'legend'},entries.map(([key,points],i)=>{
-    const swatch=dom('span',{class:'dot','aria-hidden':'true'});
-    swatch.style.backgroundColor=colors[i];
-    return dom('span',{},swatch,titleSignal(key)+' · '+display(points.at(-1).value)+' '+unitSignal(key));
+    const text=label(key)+(mini?'':' · '+withUnit(points.at(-1).value,unitSignal(key)));
+    return dom('span',{},swatch(key,i),text);
   }));
-  target.replaceChildren(visual,legend);
+  target.replaceChildren(plot,legend);
   if (mixed) target.append(dom('p',{class:'muted'},'The chart scales each signal independently.'));
+  let view;
+  let index=previous?.dataset.cursorTime ? nearestChartIndex(times,Number(previous.dataset.cursorTime)) : null;
+  const select=next=>{
+    index=next;
+    if(next==null){
+      cursor.hidden=tooltip.hidden=true;
+      delete visual.dataset.cursorTime;
+      return;
+    }
+    if(!view)return;
+    const time=times[next];
+    if(visual.dataset.cursorTime!==String(time)){
+      tooltip.replaceChildren(dom('div',{class:'chart-tooltip-time'},datetime.format(new Date(time*1000))),
+        ...samples.get(time).map(({key,value,i})=>dom('div',{class:'chart-tooltip-row'},
+          dom('span',{},swatch(key,i),label(key)),dom('strong',{},withUnit(value,unitSignal(key))))));
+      visual.dataset.cursorTime=time;
+    }
+    cursor.hidden=tooltip.hidden=false;
+    const {x0,x1,bounds}=view;
+    const x=x0+(time-bounds.minX)*(x1-x0)/(bounds.maxX-bounds.minX);
+    cursor.style.left=x+'px';
+    const tooltipWidth=tooltip.offsetWidth;
+    const left=x+12+tooltipWidth<=plot.clientWidth ? x+12 : Math.max(0,x-12-tooltipWidth);
+    tooltip.style.left=left+'px';
+  };
+  const pointAt=event=>{
+    if(!view)return;
+    const {x0,x1,bounds}=view;
+    const x=event.clientX-visual.getBoundingClientRect().left;
+    const fraction=Math.max(0,Math.min(1,(x-x0)/(x1-x0)));
+    const nearest=nearestChartIndex(times,bounds.minX+fraction*(bounds.maxX-bounds.minX));
+    if(nearest!==index)select(nearest);
+  };
+  visual.addEventListener('pointermove',pointAt);
+  visual.addEventListener('pointerdown',pointAt);
+  visual.addEventListener('pointerleave',event=>{if(event.pointerType!=='touch')select(null);});
+  visual.addEventListener('blur',()=>select(null));
+  visual.addEventListener('keydown',event=>{
+    switch(event.key){
+      case 'ArrowLeft':select(index==null?times.length-1:Math.max(0,index-1));break;
+      case 'ArrowRight':select(index==null?0:Math.min(times.length-1,index+1));break;
+      case 'Home':select(0);break;
+      case 'End':select(times.length-1);break;
+      case 'Escape':select(null);break;
+      default:return;
+    }
+    event.preventDefault();
+  });
   const render = ()=>{
     if(!visual.isConnected)return;
     const width=visual.clientWidth,height=visual.clientHeight,dpr=window.devicePixelRatio||1;
@@ -524,36 +606,76 @@ function showChart(target,data,duration,compact=false) {
     const newest=Math.floor(Date.now()/1000);
     bounds.minX=Math.min(bounds.minX,newest-duration);
     bounds.maxX=Math.max(bounds.maxX,newest);
-    const step=chartStep((bounds.maxY-bounds.minY)/4);
+    const step=chartStep((bounds.maxY-bounds.minY)/(mini?3:4));
     bounds.minY=Math.floor(bounds.minY/step)*step;
     bounds.maxY=Math.ceil(bounds.maxY/step)*step;
     const rows=mixed?4:Math.min(8,Math.round((bounds.maxY-bounds.minY)/step));
     const x0=42, x1=width-16, y0=14, y1=height-29;
+    view={x0,x1,bounds};
     ctx.font='11px system-ui';ctx.fillStyle='#556773';
     for(let i=0;i<=rows;i++){
       const y=y1-i*(y1-y0)/rows;
       ctx.strokeStyle='#dce3dd';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x0,y);ctx.lineTo(x1,y);ctx.stroke();
-      if(!mixed)ctx.fillText(numeric.format(bounds.minY+i*step),2,y+3);
+      if(!mixed)ctx.fillText(numeric.format(bounds.minY+i*step)+(mini?'%':''),2,y+3);
     }
-    const formatTime = duration<=86400?shorttime:new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric'});
-    const start=formatTime.format(new Date(bounds.minX*1000));
-    ctx.fillText(start,x0,height-6);
-    const end=formatTime.format(new Date(bounds.maxX*1000));
-    ctx.fillText(end,x1-ctx.measureText(end).width,height-6);
+    const formatTime = duration<=86400?shorttime:new Intl.DateTimeFormat(undefined,
+      duration>=365*86400?{month:'short',year:'numeric'}:{month:'short',day:'numeric'});
+    const ticks=chartTimeTicks(bounds.minX,bounds.maxX,x1-x0);
+    for(const [i,tick] of ticks.entries()){
+      const x=x0+(tick-bounds.minX)*(x1-x0)/(bounds.maxX-bounds.minX);
+      if(i>0&&i<ticks.length-1){
+        ctx.strokeStyle='#edf0f4';ctx.beginPath();ctx.moveTo(x,y0);ctx.lineTo(x,y1);ctx.stroke();
+      }
+      ctx.textAlign=i===0?'left':i===ticks.length-1?'right':'center';
+      ctx.fillText(formatTime.format(new Date(tick*1000)),x,height-6);
+    }
     for(const [i,[key,points]] of entries.entries()){
       const own=mixed?chartBounds([points]):bounds;
-      ctx.strokeStyle=colors[i];ctx.fillStyle=colors[i];ctx.lineWidth=2.2;ctx.setLineDash(key.endsWith('_ref')?[5,4]:[]);ctx.beginPath();
+      ctx.strokeStyle=colors[i];ctx.fillStyle=colors[i];ctx.lineWidth=mini?1.6:2.2;
+      ctx.setLineDash(key.endsWith('_ref')?[5,4]:[]);ctx.beginPath();
+      const isolated=[];
       for(const [j,p] of points.entries()){
         const x=x0+(p.time-bounds.minX)*(x1-x0)/(bounds.maxX-bounds.minX);
         const y=y1-(p.value-own.minY)*(y1-y0)/(own.maxY-own.minY);
-        if(j===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
-        if(points.length===1){ctx.arc(x,y,3,0,Math.PI*2);ctx.fill();}
+        const follows=j>0&&p.time-points[j-1].time<=maxGap;
+        if(follows)ctx.lineTo(x,y);else ctx.moveTo(x,y);
+        if(!follows&&(j===points.length-1||points[j+1].time-p.time>maxGap))isolated.push([x,y]);
       }
       ctx.stroke();
+      ctx.beginPath();
+      for(const [x,y] of isolated){
+        ctx.moveTo(x+2.5,y);
+        ctx.arc(x,y,2.5,0,Math.PI*2);
+      }
+      ctx.fill();
     }
+    select(index);
   };
   requestAnimationFrame(render);
-  resizeChart = render;
+  chartRenderers.set(target,render);
+  if(focused)visual.focus({preventScroll:true});
+}
+function nearestChartIndex(times,value) {
+  let left=0,right=times.length-1;
+  while(left<right){
+    const middle=Math.floor((left+right)/2);
+    if(times[middle]<value)left=middle+1;
+    else right=middle;
+  }
+  return left>0&&value-times[left-1]<=times[left]-value?left-1:left;
+}
+function chartTimeTicks(start,end,width) {
+  const spacing=70;
+  const range=end-start;
+  const ideal=range/Math.max(1,Math.floor(width/spacing));
+  const steps=[60,300,600,900,1800,3600,7200,10800,14400,21600,28800,43200,
+    86400,2*86400,4*86400,7*86400,14*86400,30*86400,60*86400,120*86400,365*86400];
+  const step=steps.find(value=>value>=ideal)??Math.ceil(ideal/(365*86400))*365*86400;
+  const edge=range*spacing*.65/Math.max(1,width);
+  const ticks=[start];
+  for(let tick=Math.ceil((start+edge)/step)*step;tick<=end-edge;tick+=step)ticks.push(tick);
+  ticks.push(end);
+  return ticks;
 }
 function chartStep(rough) {
   const scale = 10 ** Math.floor(Math.log10(rough));
@@ -1087,7 +1209,7 @@ function helpPage() {
 function renderPage() {
   refreshPageHistory = null;
   refreshPageEvents = null;
-  resizeChart = null;
+  chartRenderers.clear();
   const [hashPage,requestedSection]=window.location.hash.slice(1).split('/');
   const requested=({ 'advanced-data':'live-data', messages:'events', notifications:'events' })[hashPage]??hashPage;
   page=navigation.flatMap(([,items])=>items).some(([id])=>id===requested)?requested:'overview';
@@ -1106,7 +1228,7 @@ function renderPage() {
 
 document.querySelector('.skip').addEventListener('click',event=>{event.preventDefault();main.focus();});
 window.addEventListener('hashchange',()=>{if(window.location.hash!=='#content')renderPage();});
-window.addEventListener('resize',()=>resizeChart?.());
+window.addEventListener('resize',()=>chartRenderers.forEach(render=>render()));
 function connectPageStreams() {
   connectWhileVisible();
   connectDesktopNotices();

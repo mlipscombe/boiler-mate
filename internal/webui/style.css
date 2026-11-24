@@ -102,8 +102,10 @@
   .system-reading small { @apply text-xs leading-snug text-muted; }
   .combustion-grid { @apply grid grid-cols-2 gap-2.5 lg:grid-cols-[minmax(0,2.5fr)_minmax(0,1fr)_minmax(0,1fr)]; }
   .combustion-reading { @apply grid min-w-0 content-start gap-1 rounded-md border border-border bg-rail px-3 py-2.5; }
-  .combustion-oxygen { @apply col-span-2 gap-2 border-blue-200 bg-accent-soft sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] sm:items-center sm:gap-0 lg:col-span-1; }
+  .combustion-oxygen { @apply col-span-2 gap-2 border-blue-200 bg-accent-soft sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1.8fr)] sm:items-center sm:gap-0 lg:col-span-1; }
   .combustion-current { @apply grid gap-1 text-accent sm:pr-3; }
+  .combustion-oxygen-label { @apply flex items-baseline gap-1.5; }
+  .combustion-target { @apply text-xs font-medium whitespace-nowrap text-muted; }
   .combustion-value { @apply text-2xl leading-tight font-semibold tracking-tight; }
   .combustion-value small { @apply ml-1 text-xs font-medium tracking-normal text-muted; }
   .combustion-compensation { @apply min-w-0 border-t border-border pt-2 sm:border-t-0 sm:border-l sm:pt-0 sm:pl-3; }
@@ -111,6 +113,9 @@
   .combustion-compensation dl > div { @apply px-2 first:pl-0 last:pr-0; }
   .combustion-compensation dt { @apply text-xs text-muted; }
   .combustion-compensation dd { @apply mt-0.5 text-base font-semibold whitespace-nowrap; }
+  .combustion-trend { @apply mt-3 min-w-0 border-t border-border pt-2.5; }
+  .combustion-trend h3 { @apply text-sm font-semibold; }
+  .combustion-trend .legend { @apply mt-0.5 mb-0; }
   .compact-readings { @apply mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4; }
   .compact-reading { @apply grid gap-1; }
   .compact-reading span { @apply text-xs text-muted; }
@@ -127,9 +132,16 @@
 
   .chart { @apply block h-[clamp(11rem,26vw,20rem)] w-full; }
   .chart.compact { @apply h-48; }
+  .chart.mini { @apply h-28; }
+  .chart-plot { @apply relative min-w-0; }
+  .chart-cursor { @apply pointer-events-none absolute top-[14px] bottom-[29px] border-l border-muted; }
+  .chart-tooltip { @apply pointer-events-none absolute top-1 left-0 z-10 max-w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs leading-snug text-ink shadow-sm; }
+  .chart-tooltip-time { @apply mb-1 font-semibold text-muted; }
+  .chart-tooltip-row { @apply flex justify-between gap-3; }
   .legend, .toolbar, .switcher { @apply flex flex-wrap items-center gap-2; }
   .legend { @apply my-2 text-xs leading-5 text-muted; }
-  .dot { @apply mr-1 inline-block h-[2px] w-4 bg-accent align-middle; }
+  .dot { @apply mr-1 inline-block h-[2px] w-4 bg-current align-middle; }
+  .dot.dashed { @apply border-t-2 border-dashed border-current bg-transparent; }
   .switcher { @apply mb-3; }
   .switcher a[aria-current="page"] { @apply border-blue-200 bg-accent-soft text-accent; }
   .toolbar { @apply mb-3; }

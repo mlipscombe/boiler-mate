@@ -168,6 +168,42 @@ func (s *store) history(ctx context.Context, series string, from, to int64) ([]p
 	return points, rows.Err()
 }
 
+func (s *store) combustionHistory(ctx context.Context, now time.Time) (map[string][]point, error) {
+	// Use the minute samples so a shutdown cannot average a 0% target into a running period.
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT time,
+			MAX(CASE WHEN series = 'operating_data.oxygen' THEN total / count END),
+			COALESCE(
+				MAX(CASE WHEN series = 'operating_data.oxygen_ref' THEN total / count END),
+				MAX(CASE WHEN series = 'advanced_data.o2_setpoint' THEN total / count END)
+			),
+			MAX(CASE WHEN series = 'operating_data.state' THEN total / count END)
+		FROM samples
+		WHERE period = 60 AND time BETWEEN ? AND ?
+		  AND series IN ('operating_data.oxygen', 'operating_data.oxygen_ref', 'advanced_data.o2_setpoint', 'operating_data.state')
+		GROUP BY time ORDER BY time
+	`, now.Add(-24*time.Hour).Unix(), now.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	actual, target := []point{}, []point{}
+	for rows.Next() {
+		var timestamp int64
+		var measured, wanted, state sql.NullFloat64
+		if err := rows.Scan(&timestamp, &measured, &wanted, &state); err != nil {
+			return nil, err
+		}
+		if measured.Valid {
+			actual = append(actual, point{Time: timestamp, Value: measured.Float64})
+		}
+		if wanted.Valid && wanted.Float64 > 0 && (!state.Valid || state.Float64 != nbe.PowerStateOff) {
+			target = append(target, point{Time: timestamp, Value: wanted.Float64})
+		}
+	}
+	return map[string][]point{"operating_data.oxygen": actual, "operating_data.oxygen_ref": target}, rows.Err()
+}
+
 func (s *store) prune(ctx context.Context, now time.Time) error {
 	_, err := s.db.ExecContext(ctx, `
 		DELETE FROM samples WHERE

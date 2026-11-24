@@ -211,6 +211,7 @@ func (ui *UI) Handler() http.Handler {
 	router.HandleFunc("GET /api/status", ui.getStatus)
 	router.HandleFunc("GET /api/status/stream", ui.streamStatus)
 	router.HandleFunc("GET /api/history", ui.getHistory)
+	router.HandleFunc("GET /api/history/combustion", ui.getCombustionHistory)
 	router.HandleFunc("GET /api/consumption", ui.getConsumption)
 	router.HandleFunc("GET /api/events", ui.getEvents)
 	router.HandleFunc("GET /api/notifications", ui.getNotices)
@@ -296,6 +297,15 @@ func (ui *UI) getHistory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		series[key] = points
+	}
+	writeJSON(w, series)
+}
+
+func (ui *UI) getCombustionHistory(w http.ResponseWriter, r *http.Request) {
+	series, err := ui.store.combustionHistory(r.Context(), time.Now())
+	if err != nil {
+		ui.serverError(w, "read combustion history", err)
+		return
 	}
 	writeJSON(w, series)
 }

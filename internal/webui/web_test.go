@@ -143,6 +143,48 @@ func TestControllerAPIReadOnlyChecks(t *testing.T) {
 	}
 }
 
+func TestCombustionHistoryKeepsInactiveTargetGaps(t *testing.T) {
+	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ui.Close() })
+	now := time.Now().Truncate(time.Minute)
+	first := now.Add(-5 * time.Minute)
+	for _, sample := range []struct {
+		at     time.Time
+		prefix string
+		values map[string]any
+	}{
+		{now.Add(-25 * time.Hour), "operating_data", map[string]any{"oxygen": int64(7), "oxygen_ref": int64(10)}},
+		{first, "operating_data", map[string]any{"oxygen": int64(8), "oxygen_ref": int64(10), "state": int64(5)}},
+		{first, "advanced_data", map[string]any{"o2_setpoint": int64(12)}},
+		{first.Add(time.Minute), "operating_data", map[string]any{"oxygen": int64(15), "oxygen_ref": int64(10), "state": int64(nbe.PowerStateOff)}},
+		{first.Add(2 * time.Minute), "operating_data", map[string]any{"oxygen": int64(17), "oxygen_ref": int64(0), "state": int64(5)}},
+		{first.Add(2 * time.Minute), "advanced_data", map[string]any{"o2_setpoint": int64(12)}},
+		{first.Add(3 * time.Minute), "operating_data", map[string]any{"oxygen": int64(9), "state": int64(5)}},
+		{first.Add(3 * time.Minute), "advanced_data", map[string]any{"o2_setpoint": int64(12)}},
+	} {
+		if err := ui.store.record(t.Context(), sample.prefix, sample.at, sample.values); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result := httptest.NewRecorder()
+	ui.Handler().ServeHTTP(result, httptest.NewRequest(http.MethodGet, "/api/history/combustion", nil))
+	var series map[string][]point
+	if err := json.Unmarshal(result.Body.Bytes(), &series); err != nil || result.Code != http.StatusOK {
+		t.Fatalf("combustion history status %d: %s, %v", result.Code, result.Body, err)
+	}
+	actual := []point{
+		{first.Unix(), 8}, {first.Add(time.Minute).Unix(), 15},
+		{first.Add(2 * time.Minute).Unix(), 17}, {first.Add(3 * time.Minute).Unix(), 9},
+	}
+	target := []point{{first.Unix(), 10}, {first.Add(3 * time.Minute).Unix(), 12}}
+	if !slices.Equal(series["operating_data.oxygen"], actual) || !slices.Equal(series["operating_data.oxygen_ref"], target) {
+		t.Fatalf("unexpected combustion history: %v", series)
+	}
+}
+
 type trip2Fixture struct {
 	readOnlyFixture
 	value int64

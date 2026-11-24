@@ -133,7 +133,7 @@ func withOperatingState(values map[string]any) map[string]any {
 	}
 	values["state_text"] = message
 	values["state_on"] = "ON"
-	if state == 14 {
+	if state == nbe.PowerStateOff {
 		values["state_on"] = "OFF"
 	}
 	return values

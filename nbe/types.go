@@ -68,6 +68,8 @@ var Settings = []string{
 	"manual",
 }
 
+const PowerStateOff = 14
+
 var PowerStates = []string{
 	"Wait a moment",
 	"Ignition 1",
