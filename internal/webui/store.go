@@ -167,7 +167,7 @@ func (s *store) addEvent(ctx context.Context, at time.Time, kind, message string
 }
 
 func (s *store) events(ctx context.Context, before int64, filter string) ([]event, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return s.queryEvents(ctx, `
 		SELECT id, time, kind, message, seen
 		FROM events
 		WHERE (@before = 0 OR id < @before)
@@ -179,6 +179,25 @@ func (s *store) events(ctx context.Context, before int64, filter string) ([]even
 		  END
 		ORDER BY id DESC LIMIT 150
 	`, sql.Named("before", before), sql.Named("filter", filter))
+}
+
+func (s *store) latestEventID(ctx context.Context) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) FROM events").Scan(&id)
+	return id, err
+}
+
+func (s *store) desktopNoticesAfter(ctx context.Context, after int64) ([]event, error) {
+	return s.queryEvents(ctx, `
+		SELECT id, time, kind, message, seen
+		FROM events
+		WHERE id > ? AND seen = 0 AND kind IN ('alarm', 'info', 'connection')
+		ORDER BY id LIMIT 150
+	`, after)
+}
+
+func (s *store) queryEvents(ctx context.Context, query string, args ...any) ([]event, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

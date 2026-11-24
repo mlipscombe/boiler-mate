@@ -36,16 +36,17 @@ type UI struct {
 	logger     *slog.Logger
 	serial     string
 
-	settingsMu sync.Mutex
-	mu         sync.RWMutex
-	snapshots  map[string]snapshot
-	lastSample map[string]time.Time
-	changed    chan struct{}
-	historyRev uint64
-	eventRev   uint64
-	lastState  string
-	lastInfo   string
-	offline    bool
+	settingsMu   sync.Mutex
+	mu           sync.RWMutex
+	snapshots    map[string]snapshot
+	lastSample   map[string]time.Time
+	changed      chan struct{}
+	eventChanged chan struct{}
+	historyRev   uint64
+	eventRev     uint64
+	lastState    string
+	lastInfo     string
+	offline      bool
 }
 
 type snapshot struct {
@@ -61,7 +62,7 @@ func New(ctx context.Context, logger *slog.Logger, boiler controller, serial, da
 	return &UI{
 		controller: boiler, write: write, store: store, logger: logger, serial: serial,
 		snapshots: make(map[string]snapshot), lastSample: make(map[string]time.Time),
-		changed: make(chan struct{}),
+		changed: make(chan struct{}), eventChanged: make(chan struct{}),
 	}, nil
 }
 
@@ -203,6 +204,7 @@ func (ui *UI) Handler() http.Handler {
 	router.HandleFunc("GET /api/consumption", ui.getConsumption)
 	router.HandleFunc("GET /api/events", ui.getEvents)
 	router.HandleFunc("GET /api/notifications", ui.getNotices)
+	router.HandleFunc("GET /api/notifications/stream", ui.streamNotices)
 	router.HandleFunc("POST /api/notifications/{id}/read", ui.markRead)
 	router.HandleFunc("GET /api/settings/{group}", ui.getSettings)
 	router.HandleFunc("PUT /api/settings/{group}/{key}", ui.putSetting)

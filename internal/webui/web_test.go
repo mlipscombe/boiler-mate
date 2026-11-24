@@ -315,6 +315,84 @@ func TestStatusStream(t *testing.T) {
 	readEvent(43, 2)
 }
 
+func TestDesktopNoticeStream(t *testing.T) {
+	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ui.Close() })
+	handler := ui.Handler()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	client := server.Client()
+	client.Timeout = 3 * time.Second
+
+	open := func(after string) (*http.Response, *bufio.Scanner) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+"/api/notifications/stream", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after != "" {
+			req.URL.RawQuery = "after=0"
+			req.Header.Set("Last-Event-ID", after)
+		}
+		response, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = response.Body.Close() })
+		if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/event-stream" {
+			t.Fatalf("unexpected stream response: %s %v", response.Status, response.Header)
+		}
+		return response, bufio.NewScanner(response.Body)
+	}
+	assertFrame := func(scanner *bufio.Scanner, id string, messages ...string) {
+		t.Helper()
+		if !scanner.Scan() || scanner.Text() != "id: "+id {
+			t.Fatalf("expected notice cursor %s, got %q (%v)", id, scanner.Text(), scanner.Err())
+		}
+		if !scanner.Scan() {
+			t.Fatalf("could not read notice data: %v", scanner.Err())
+		}
+		value, ok := strings.CutPrefix(scanner.Text(), "data: ")
+		var rows []event
+		if err := json.Unmarshal([]byte(value), &rows); !ok || err != nil {
+			t.Fatalf("invalid notice data %q: %v", scanner.Text(), err)
+		}
+		var got []string
+		for _, row := range rows {
+			got = append(got, row.Message)
+		}
+		if !slices.Equal(got, messages) || !scanner.Scan() || scanner.Text() != "" {
+			t.Fatalf("expected notices %v and a separator, got %v and %q", messages, got, scanner.Text())
+		}
+	}
+	ui.addEvent(t.Context(), time.Now(), "info", "Old notice")
+	response, scanner := open("")
+	assertFrame(scanner, "1")
+	ui.addEvent(t.Context(), time.Now(), "state", "Standby")
+	ui.addEvent(t.Context(), time.Now(), "command", "Controller acknowledged the command")
+	ui.addEvent(t.Context(), time.Now(), "alarm", "New alarm")
+	assertFrame(scanner, "4", "New alarm")
+	_ = response.Body.Close()
+
+	ui.addEvent(t.Context(), time.Now(), "info", "Already read")
+	mark := httptest.NewRequest(http.MethodPost, "/api/notifications/5/read", nil)
+	mark.Header.Set("X-Boiler-Mate", "1")
+	marked := httptest.NewRecorder()
+	handler.ServeHTTP(marked, mark)
+	if marked.Code != http.StatusNoContent {
+		t.Fatalf("could not mark the notice read: %d %s", marked.Code, marked.Body.String())
+	}
+	ui.addEvent(t.Context(), time.Now(), "connection", "Connection interrupted")
+	ui.addEvent(t.Context(), time.Now(), "info", "New information")
+	response, scanner = open("4")
+	assertFrame(scanner, "4")
+	assertFrame(scanner, "7", "Connection interrupted", "New information")
+	_ = response.Body.Close()
+}
+
 func TestTimerRange(t *testing.T) {
 	bounds := &settingRange{Max: 111111111111}
 	for _, check := range []struct {

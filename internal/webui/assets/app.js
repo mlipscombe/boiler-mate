@@ -92,8 +92,9 @@ let refreshPageHistory = null;
 let refreshPageEvents = null;
 let resizeChart = null;
 let toastTimer = 0;
-let noticeReady = false;
-let lastDesktopNotice = 0;
+let noticeSource = null;
+let noticePoll = 0;
+let lastDesktopNotice = null;
 let noticeFilter = saved('noticeFilter', ['alarm','info','connection']);
 let chosenSignals = saved('signals',['operating_data.boiler_temp','operating_data.boiler_ref']);
 let chosenMetrics = saved('metrics',['operating_data.external_temp','operating_data.air_flow'])
@@ -713,7 +714,10 @@ function desktopNotifications(open) {
     if(typeof Notification==='undefined'||!window.isSecureContext){toast('Desktop notices need HTTPS or a localhost connection.');return;}
     const permission=await Notification.requestPermission();
     toast(permission==='granted'?'Desktop notices are enabled.':'Your browser did not grant notification access.');
-    if(permission==='granted')desktop.textContent='Desktop notifications enabled';
+    if(permission==='granted'){
+      desktop.textContent='Desktop notifications enabled';
+      connectDesktopNotices();
+    }
   },'primary');
   const options=[['alarm','Boiler alarms'],['info','Controller information'],['connection','Connection interruptions']];
   const inputs=dom('div',{class:'signal-chooser'},options.map(([kind,label])=>dom('label',{},
@@ -722,17 +726,77 @@ function desktopNotifications(open) {
       saveLocal('noticeFilter',noticeFilter);
     }}),label)));
   return dom('details',{open},dom('summary',{},'Desktop notifications'),
-    dom('p',{},'Choose which notices this browser can show while Boiler Mate is open.'),inputs,desktop);
+    dom('p',{},'Choose which notices to show while the dashboard tab is open, including in the background.'),inputs,desktop);
 }
-async function checkDesktopNotices() {
-  if(typeof Notification==='undefined'||Notification.permission!=='granted')return;
-  try {
-    const rows=await api('events?filter=notices');
-    if(noticeReady)rows.filter(row=>row.id>lastDesktopNotice&&noticeFilter.includes(row.kind)&&!row.read)
-      .reverse().forEach(row=>new Notification('Boiler Mate', {body:row.message,icon:'/icon-192.png',tag:'boiler-'+row.id}));
-    lastDesktopNotice=Math.max(lastDesktopNotice,rows[0]?.id??0);
-    noticeReady=true;
-  } catch {}
+function desktopNoticesAllowed() {
+  return typeof Notification!=='undefined'&&Notification.permission==='granted';
+}
+function deliverDesktopNotices(rows,cursor) {
+  if(!desktopNoticesAllowed()){
+    stopDesktopNotices();
+    lastDesktopNotice=null;
+    return;
+  }
+  const previous=lastDesktopNotice;
+  lastDesktopNotice=cursor;
+  if(previous===null)return;
+  const selected=saved('noticeFilter',noticeFilter);
+  for(const row of rows){
+    if(row.id<=previous||row.read||!selected.includes(row.kind))continue;
+    try {
+      new Notification('Boiler Mate',{body:row.message,icon:'/icon-192.png',tag:'boiler-'+row.id});
+    } catch {}
+  }
+}
+function startNoticePolling() {
+  if(noticePoll)return;
+  let pending=false;
+  const check=async()=>{
+    if(pending)return;
+    pending=true;
+    try {
+      const rows=await api('events?filter=notices');
+      const cursor=Math.max(lastDesktopNotice??0,rows[0]?.id??0);
+      if(noticePoll===poll)deliverDesktopNotices(rows.reverse(),cursor);
+    } catch {}
+    finally {pending=false;}
+  };
+  const poll=setInterval(check,15000);
+  noticePoll=poll;
+  check();
+}
+function stopDesktopNotices() {
+  noticeSource?.close();
+  noticeSource=null;
+  clearInterval(noticePoll);
+  noticePoll=0;
+}
+function connectDesktopNotices() {
+  if(!desktopNoticesAllowed()){
+    stopDesktopNotices();
+    lastDesktopNotice=null;
+    return;
+  }
+  if(typeof EventSource!=='function'){
+    startNoticePolling();
+    return;
+  }
+  if(noticeSource?.readyState===EventSource.CLOSED)stopDesktopNotices();
+  if(noticeSource)return;
+  const after=lastDesktopNotice===null?'':'?after='+lastDesktopNotice;
+  const source=new EventSource('/api/notifications/stream'+after);
+  noticeSource=source;
+  source.onmessage=event=>{
+    if(noticeSource!==source)return;
+    const cursor=Number(event.lastEventId);
+    let rows;
+    try {rows=JSON.parse(event.data);}
+    catch {return;}
+    if(Number.isSafeInteger(cursor)&&Array.isArray(rows))deliverDesktopNotices(rows,cursor);
+  };
+  source.onerror=()=>{
+    if(noticeSource===source&&source.readyState===EventSource.CLOSED)startNoticePolling();
+  };
 }
 function dataTable(query) {
   const entries=liveReadingKeys().sort((a,b)=>titleSignal(a).localeCompare(titleSignal(b)));
@@ -929,8 +993,16 @@ function renderPage() {
 document.querySelector('.skip').addEventListener('click',event=>{event.preventDefault();main.focus();});
 window.addEventListener('hashchange',()=>{if(window.location.hash!=='#content')renderPage();});
 window.addEventListener('resize',()=>resizeChart?.());
-document.addEventListener('visibilitychange',connectWhileVisible);
-window.addEventListener('pagehide',stopStatusStream);
-window.addEventListener('pageshow',connectWhileVisible);
-refresh().then(()=>{renderPage();connectWhileVisible();});
-setInterval(checkDesktopNotices,15000);
+function connectPageStreams() {
+  connectWhileVisible();
+  connectDesktopNotices();
+}
+document.addEventListener('visibilitychange',connectPageStreams);
+document.addEventListener('freeze',stopDesktopNotices);
+document.addEventListener('resume',connectDesktopNotices);
+window.addEventListener('pagehide',()=>{
+  stopStatusStream();
+  stopDesktopNotices();
+});
+window.addEventListener('pageshow',connectPageStreams);
+refresh().then(()=>{renderPage();connectPageStreams();});

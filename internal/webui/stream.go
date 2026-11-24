@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -29,7 +30,15 @@ func (ui *UI) signalEventChange() {
 	ui.mu.Lock()
 	defer ui.mu.Unlock()
 	ui.eventRev++
+	close(ui.eventChanged)
+	ui.eventChanged = make(chan struct{})
 	ui.signalChange()
+}
+
+func (ui *UI) eventChanges() <-chan struct{} {
+	ui.mu.RLock()
+	defer ui.mu.RUnlock()
+	return ui.eventChanged
 }
 
 func (ui *UI) statusSnapshot(telemetryOnly bool) (dashboardStatus, <-chan struct{}) {
@@ -62,22 +71,12 @@ func (ui *UI) streamStatus(w http.ResponseWriter, r *http.Request) {
 	var wasOnline bool
 	for r.Context().Err() == nil {
 		status, changed := ui.statusSnapshot(true)
-		// Extend the normal HTTP write deadline for each event, while bounding a blocked write.
-		if err := response.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil && !errors.Is(err, http.ErrNotSupported) {
-			return
-		}
-		var err error
+		var data any
 		if previous != changed || wasOnline != status.Online {
-			var data []byte
-			data, err = json.Marshal(status)
-			if err == nil {
-				_, err = fmt.Fprintf(w, "data: %s\n\n", data)
-			}
+			data = status
 			previous, wasOnline = changed, status.Online
-		} else {
-			_, err = io.WriteString(w, ": keepalive\n\n")
 		}
-		if err != nil || response.Flush() != nil {
+		if writeStreamFrame(w, response, "", data) != nil {
 			return
 		}
 		select {
@@ -87,4 +86,89 @@ func (ui *UI) streamStatus(w http.ResponseWriter, r *http.Request) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (ui *UI) streamNotices(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	raw := r.Header.Get("Last-Event-ID")
+	if raw == "" {
+		raw = r.URL.Query().Get("after")
+	}
+	var cursor int64
+	if raw != "" {
+		var err error
+		cursor, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || cursor < 0 {
+			problem(w, http.StatusBadRequest, "Invalid notice cursor.")
+			return
+		}
+	}
+	latest, err := ui.store.latestEventID(ctx)
+	if err != nil {
+		ui.serverError(w, "read notice cursor", err)
+		return
+	}
+	if raw == "" || cursor > latest {
+		cursor = latest
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	response := http.NewResponseController(w)
+	if writeStreamFrame(w, response, strconv.FormatInt(cursor, 10), []event{}) != nil {
+		return
+	}
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for ctx.Err() == nil {
+		// Capture the signal before querying so an event committed during the query wakes the stream.
+		changed := ui.eventChanges()
+		notices, err := ui.store.desktopNoticesAfter(ctx, cursor)
+		if err != nil {
+			if ctx.Err() == nil {
+				ui.logger.Warn("Could not read desktop notices", "error", err)
+			}
+			return
+		}
+		if len(notices) > 0 {
+			cursor = notices[len(notices)-1].ID
+			if writeStreamFrame(w, response, strconv.FormatInt(cursor, 10), notices) != nil {
+				return
+			}
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-changed:
+		case <-ticker.C:
+			if writeStreamFrame(w, response, "", nil) != nil {
+				return
+			}
+		}
+	}
+}
+
+func writeStreamFrame(w http.ResponseWriter, response *http.ResponseController, id string, value any) error {
+	// Extend the HTTP server's write deadline while bounding a blocked connection.
+	if err := response.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		return err
+	}
+	if value == nil {
+		if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+			return err
+		}
+	} else {
+		data, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		if id != "" {
+			if _, err := fmt.Fprintf(w, "id: %s\n", id); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+			return err
+		}
+	}
+	return response.Flush()
 }
