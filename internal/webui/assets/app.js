@@ -31,7 +31,7 @@ const readingGroups = ['operating_data','advanced_data'];
 const readingAliases = {
   o2_corr_low:'corr_low',o2_corr_medium:'corr_medium',o2_corr_high:'corr_high',clouds:'cloud_level',
 };
-const combustionReadings = new Set(['oxygen','corr_low','corr_medium','corr_high','photo_level','smoke_temp']);
+const combustionReadings = new Set(['oxygen','oxygen_ref','o2_setpoint','corr_low','corr_medium','corr_high','photo_level','smoke_temp']);
 const consumptionPeriods = [['hours','Hourly'],['days','Daily'],['months','Monthly'],['years','Yearly']];
 const labels = {
   boiler_temp: ['Boiler temperature','°C'], boiler_ref: ['Boiler target temperature','°C'],
@@ -99,7 +99,8 @@ let pushSetup = null;
 let pushSubscription = null;
 let noticeFilter = saved('noticeFilter', ['alarm','info','connection']);
 let chosenSignals = saved('signals',['operating_data.boiler_temp','operating_data.boiler_ref']);
-let chosenMetrics = saved('metrics',['operating_data.external_temp','operating_data.air_flow'])
+const defaultOverviewReadings = ['operating_data.external_temp','operating_data.air_flow'];
+let chosenMetrics = saved('metrics',defaultOverviewReadings)
   .filter(key=>!combustionReadings.has(readingName(key)));
 
 function dom(tag, attrs = {}, ...children) {
@@ -337,10 +338,13 @@ function renderCombustion(target) {
       dom('span',{class:'metric-label'},name),
       dom('strong',{class:'combustion-value'},display(value),value!=null&&dom('small',{},unitSignal(key))));
   };
+  const oxygen = reading('Oxygen','oxygen','combustion-current');
+  const oxygenTarget = status.online ? signal('operating_data.oxygen_ref') ?? signal('advanced_data.o2_setpoint') : null;
+  oxygen.append(dom('span',{class:'metric-label'},'Target '+withUnit(oxygenTarget,'%')));
   const compensation = [['Low','corr_low'],['Medium','corr_medium'],['High','corr_high']];
   target.replaceChildren(
     dom('section',{class:'combustion-reading combustion-oxygen','aria-label':'Oxygen and compensation'},
-      reading('Oxygen','oxygen','combustion-current'),
+      oxygen,
       dom('div',{class:'combustion-compensation'},dom('span',{class:'metric-label'},'O₂ compensation'),
         dom('dl',{},compensation.map(([name,key])=>{
           const value = status.online ? signal('operating_data.'+key) ?? signal('advanced_data.o2_'+key) : null;
@@ -354,7 +358,8 @@ function overview(token) {
   const chartBody = dom('div',{},empty('Loading temperature history…'));
   const recent = dom('div',{},empty('Loading recent events…'));
   const metricsPanel = dom('div',{},empty('Waiting for telemetry…'));
-  const customise = dom('details',{},dom('summary',{},'Choose overview readings'),metricsPanel);
+  const customise = dom('details',{},dom('summary',{},'Choose overview readings'),metricsPanel,
+    btn('Reset to default',()=>setMetrics(null),'secondary mt-2'));
   main.replaceChildren(heading('Pellet boiler'),
     dom('div',{class:'stack'},live,
       card('Combustion',null,dom('div',{class:'combustion-grid',id:'overview-combustion'})),
@@ -363,12 +368,13 @@ function overview(token) {
         card('Recent events',null,recent,dom('a',{class:'home-link',href:'#events'},'View all events'))),
       card('Other readings',null,dom('div',{class:'compact-readings',id:'overview-custom'}),customise)));
   updateOverview();
-  const renderChooser = ()=>chooseSignals(metricsPanel,chosenMetrics,selection=>{
-    chosenMetrics=selection;
+  const setMetrics = selection=>{
+    chosenMetrics=selection??defaultOverviewReadings;
     saveLocal('metrics',selection);
     updateOverview();
     renderChooser();
-  },{exclude:combustionReadings});
+  };
+  const renderChooser = ()=>chooseSignals(metricsPanel,chosenMetrics,setMetrics,{exclude:combustionReadings});
   customise.addEventListener('toggle',()=>{if(customise.open)renderChooser();});
   let historyRequest = 0;
   const refreshChart = async(showError=false)=>{
