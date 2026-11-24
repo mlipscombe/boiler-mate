@@ -56,7 +56,9 @@ func Run(parent context.Context, cfg config.Config, logger *slog.Logger) error {
 		if writesEnabled {
 			write = queue.write
 		}
-		ui, err = webui.New(ctx, logger, boiler, boiler.Serial, cfg.WebData, write)
+		ui, err = webui.New(ctx, logger, boiler, boiler.Serial, cfg.WebData, webui.Options{
+			Write: write, OutdoorWeatherFahrenheit: cfg.OutdoorWeatherFahrenheit,
+		})
 		if err != nil {
 			return err
 		}

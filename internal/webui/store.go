@@ -168,8 +168,8 @@ func (s *store) history(ctx context.Context, series string, from, to int64) ([]p
 	return points, rows.Err()
 }
 
-func (s *store) performanceHistory(ctx context.Context, now time.Time) (map[string][]point, error) {
-	// Use the minute samples so a shutdown cannot average a 0% target into a running period.
+func (s *store) performanceHistory(ctx context.Context, now time.Time, showOffTarget bool) (map[string][]point, error) {
+	// Keep minute samples to preserve target changes at shutdown.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT time,
 			MAX(CASE WHEN series = 'operating_data.boiler_temp' THEN total / count END),
@@ -206,7 +206,10 @@ func (s *store) performanceHistory(ctx context.Context, now time.Time) (map[stri
 		if measured.Valid {
 			oxygen = append(oxygen, point{Time: timestamp, Value: measured.Float64})
 		}
-		if wanted.Valid && wanted.Float64 > 0 && (!state.Valid || state.Float64 != nbe.PowerStateOff) {
+		off := state.Valid && state.Float64 == nbe.PowerStateOff
+		if off && showOffTarget {
+			oxygenTarget = append(oxygenTarget, point{Time: timestamp, Value: 0})
+		} else if !off && wanted.Valid && (wanted.Float64 > 0 || showOffTarget && wanted.Float64 == 0) {
 			oxygenTarget = append(oxygenTarget, point{Time: timestamp, Value: wanted.Float64})
 		}
 	}

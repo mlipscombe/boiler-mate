@@ -25,7 +25,7 @@ func (f pushRequestFunc) Do(r *http.Request) (*http.Response, error) { return f(
 func TestWebPushDeliveryWithNoDashboardConnection(t *testing.T) {
 	ctx := t.Context()
 	dir := t.TempDir()
-	ui, err := New(ctx, slog.Default(), readOnlyFixture{}, "FIXTURE", dir, nil)
+	ui, err := New(ctx, slog.Default(), readOnlyFixture{}, "FIXTURE", dir, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestWebPushDeliveryWithNoDashboardConnection(t *testing.T) {
 	if err := ui.Close(); err != nil {
 		t.Fatal(err)
 	}
-	ui, err = New(ctx, slog.Default(), readOnlyFixture{}, "FIXTURE", dir, nil)
+	ui, err = New(ctx, slog.Default(), readOnlyFixture{}, "FIXTURE", dir, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

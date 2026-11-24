@@ -217,7 +217,7 @@ function applyStatus(next, resuming = false) {
   for (const reading of main.querySelectorAll('[data-live-metric]')) {
     reading.textContent = display(signal(reading.dataset.liveMetric));
   }
-  if (status.historyRevision!==previous.historyRevision) refreshPageHistory?.();
+  if (status.historyRevision!==previous.historyRevision||(page==='overview'&&status.fahrenheit!==previous.fahrenheit)) refreshPageHistory?.();
   if (resuming || status.eventRevision!==previous.eventRevision) refreshPageEvents?.();
 }
 async function refresh(resuming = false) {
@@ -401,7 +401,7 @@ function overview(token) {
       if(token!==generation||request!==historyRequest)return;
       const ordered=Object.fromEntries(Object.keys(performanceNames).map(key=>[key,data[key]??[]]));
       showChart(chartBody,ordered,86400,{size:'performance',names:performanceNames,
-        seriesColors:performanceColors,axes:['°C','%'],maxGap:60});
+        seriesColors:performanceColors,axes:{'°C':null,'%':{minY:0,maxY:status.fahrenheit?50:100}},maxGap:60});
     }catch(error){
       if(showError&&token===generation&&request===historyRequest)chartBody.replaceChildren(empty(error.message));
     }
@@ -519,16 +519,17 @@ function chartBounds(series) {
   const margin = Math.max((maxY-minY)*.07, .1);
   return {minX,maxX:maxX===minX?minX+1:maxX,minY:minY-margin,maxY:maxY+margin};
 }
-function showChart(target,data,duration,{size='',names={},seriesColors={},axes=[],maxGap=Infinity}={}) {
+function showChart(target,data,duration,{size='',names={},seriesColors={},axes={},maxGap=Infinity}={}) {
   const entries = Object.entries(data).filter(([,points])=>points.length);
   chartRenderers.delete(target);
   if(!entries.length){target.replaceChildren(empty('No readings in this period yet.'));return;}
   const previous=target.querySelector('canvas.chart');
   const focused=previous===document.activeElement;
+  const previousTime=previous?.dataset.cursorTime;
   const label=key=>names[key]??titleSignal(key);
   const color=(key,i)=>seriesColors[key]??colors[i];
   const units = new Set(entries.map(([key])=>unitSignal(key)));
-  const axisUnits=axes.filter(unit=>units.has(unit));
+  const axisUnits=Object.keys(axes).filter(unit=>units.has(unit));
   const mixed=units.size>1&&!axisUnits.length;
   const performance=size==='performance';
   const visual = dom('canvas',{class:size?'chart '+size:'chart',role:'img',tabindex:0,
@@ -556,7 +557,7 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes=[
   target.replaceChildren(plot,legend);
   if (mixed) target.append(dom('p',{class:'muted'},'The chart scales each signal independently.'));
   let view;
-  let index=previous?.dataset.cursorTime ? nearestChartIndex(times,Number(previous.dataset.cursorTime)) : null;
+  let index=previousTime ? nearestChartIndex(times,Number(previousTime)) : null;
   const select=next=>{
     index=next;
     if(next==null){
@@ -617,13 +618,14 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes=[
     const step=chartStep((bounds.maxY-bounds.minY)/4);
     bounds.minY=Math.floor(bounds.minY/step)*step;
     bounds.maxY=Math.ceil(bounds.maxY/step)*step;
+    const rows=axisUnits.length?5:mixed?4:Math.min(8,Math.round((bounds.maxY-bounds.minY)/step));
     const scales=new Map(axisUnits.map(unit=>{
+      if(axes[unit])return [unit,axes[unit]];
       const range=chartBounds(entries.filter(([key])=>unitSignal(key)===unit).map(([,points])=>points));
-      const axisStep=chartStep((range.maxY-range.minY)/3);
+      const axisStep=chartStep((range.maxY-range.minY)/(rows-1));
       const minY=Math.floor(range.minY/axisStep)*axisStep;
-      return [unit,{minY,maxY:minY+4*axisStep}];
+      return [unit,{minY,maxY:minY+rows*axisStep}];
     }));
-    const rows=mixed||axisUnits.length?4:Math.min(8,Math.round((bounds.maxY-bounds.minY)/step));
     const x0=axisUnits.length?48:42, x1=width-(axisUnits.length>1?44:16), y0=14, y1=height-29;
     view={x0,x1,bounds};
     ctx.font='11px system-ui';ctx.fillStyle='#556773';
@@ -650,6 +652,10 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes=[
       ctx.textAlign=i===0?'left':i===ticks.length-1?'right':'center';
       ctx.fillText(formatTime.format(new Date(tick*1000)),x,height-6);
     }
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x0,y0,x1-x0,y1-y0);
+    ctx.clip();
     for(const [i,[key,points]] of entries.entries()){
       const own=scales.get(unitSignal(key))??(mixed?chartBounds([points]):bounds);
       ctx.strokeStyle=color(key,i);ctx.fillStyle=color(key,i);ctx.lineWidth=2.2;
@@ -670,6 +676,7 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes=[
       }
       ctx.fill();
     }
+    ctx.restore();
     select(index);
   };
   requestAnimationFrame(render);

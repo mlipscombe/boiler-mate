@@ -16,6 +16,7 @@ type dashboardStatus struct {
 	Data            map[string]snapshot `json:"data"`
 	Online          bool                `json:"online"`
 	Control         bool                `json:"control"`
+	Fahrenheit      bool                `json:"fahrenheit"`
 	HistoryRevision uint64              `json:"historyRevision"`
 	EventRevision   uint64              `json:"eventRevision"`
 }
@@ -55,10 +56,20 @@ func (ui *UI) statusSnapshot(telemetryOnly bool) (dashboardStatus, <-chan struct
 	} else {
 		data = maps.Clone(ui.snapshots)
 	}
+	if ui.outdoorWeatherFahrenheit {
+		for _, topic := range []string{"operating_data", "advanced_data"} {
+			readings := data[topic]
+			if temp, ok := number(readings.Values["outdoor_temp"]); ok && temp < 999 {
+				readings.Values = maps.Clone(readings.Values)
+				readings.Values["outdoor_temp"] = fahrenheitToCelsius(temp)
+				data[topic] = readings
+			}
+		}
+	}
 	latest := data["operating_data"].At
 	return dashboardStatus{
 		Serial: ui.serial, Data: data, Online: !latest.IsZero() && time.Since(latest) < 20*time.Second,
-		Control: ui.write != nil, HistoryRevision: ui.historyRev, EventRevision: ui.eventRev,
+		Control: ui.write != nil, Fahrenheit: ui.fahrenheit, HistoryRevision: ui.historyRev, EventRevision: ui.eventRev,
 	}, ui.changed
 }
 

@@ -31,14 +31,15 @@ import (
 )
 
 type Config struct {
-	LogLevel     slog.Level
-	Bind         string
-	Controller   *url.URL
-	MQTT         *url.URL
-	HADiscovery  bool
-	EnableWrites bool
-	WebBind      string
-	WebData      string
+	LogLevel                 slog.Level
+	Bind                     string
+	Controller               *url.URL
+	MQTT                     *url.URL
+	HADiscovery              bool
+	EnableWrites             bool
+	WebBind                  string
+	WebData                  string
+	OutdoorWeatherFahrenheit bool
 }
 
 func Load(args []string, output io.Writer) (Config, error) {
@@ -53,6 +54,8 @@ func Load(args []string, output io.Writer) (Config, error) {
 	flags.BoolVar(&cfg.HADiscovery, "homeassistant", lookupEnvOrBool("BOILER_MATE_HOMEASSISTANT", true), "enable Home Assistant discovery")
 	flags.StringVar(&cfg.WebBind, "web-bind", lookupEnvOrString("BOILER_MATE_WEB_BIND", "false"), "web interface listen address, or false")
 	flags.StringVar(&cfg.WebData, "web-data", lookupEnvOrString("BOILER_MATE_WEB_DATA", "boiler-mate-data"), "web interface data directory")
+	flags.BoolVar(&cfg.OutdoorWeatherFahrenheit, "outdoor-weather-fahrenheit",
+		lookupEnvOrBool("BOILER_MATE_OUTDOOR_WEATHER_FAHRENHEIT", false), "convert Fahrenheit outdoor weather readings for the dashboard")
 	if err := flags.Parse(args); err != nil {
 		return cfg, err
 	}

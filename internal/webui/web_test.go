@@ -59,7 +59,7 @@ func TestControllerAPIReadOnlyChecks(t *testing.T) {
 		t.Fatal("the read-only verification attempted to write a controller setting")
 		return nil
 	}
-	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), write)
+	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), Options{Write: write})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,8 +143,8 @@ func TestControllerAPIReadOnlyChecks(t *testing.T) {
 	}
 }
 
-func TestPerformanceHistoryAlignsReadingsAndKeepsInactiveTargetGaps(t *testing.T) {
-	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), nil)
+func TestPerformanceHistoryAlignsReadingsAndShowsOffTargets(t *testing.T) {
+	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,6 +164,7 @@ func TestPerformanceHistoryAlignsReadingsAndKeepsInactiveTargetGaps(t *testing.T
 		{first.Add(2 * time.Minute), "advanced_data", map[string]any{"o2_setpoint": int64(12)}},
 		{first.Add(3 * time.Minute), "operating_data", map[string]any{"oxygen": int64(9), "state": int64(5)}},
 		{first.Add(3 * time.Minute), "advanced_data", map[string]any{"o2_setpoint": int64(12)}},
+		{first.Add(4 * time.Minute), "operating_data", map[string]any{"oxygen": int64(19), "state": int64(nbe.PowerStateOff)}},
 	} {
 		if err := ui.store.record(t.Context(), sample.prefix, sample.at, sample.values); err != nil {
 			t.Fatal(err)
@@ -186,8 +187,12 @@ func TestPerformanceHistoryAlignsReadingsAndKeepsInactiveTargetGaps(t *testing.T
 	actual := []point{
 		{first.Unix(), 8}, {first.Add(time.Minute).Unix(), 15},
 		{first.Add(2 * time.Minute).Unix(), 17}, {first.Add(3 * time.Minute).Unix(), 9},
+		{first.Add(4 * time.Minute).Unix(), 19},
 	}
-	target := []point{{first.Unix(), 10}, {first.Add(3 * time.Minute).Unix(), 12}}
+	target := []point{
+		{first.Unix(), 10}, {first.Add(time.Minute).Unix(), 0}, {first.Add(2 * time.Minute).Unix(), 0},
+		{first.Add(3 * time.Minute).Unix(), 12}, {first.Add(4 * time.Minute).Unix(), 0},
+	}
 	if !slices.Equal(series["operating_data.boiler_temp"], temperature) ||
 		!slices.Equal(series["operating_data.boiler_ref"], temperatureTarget) ||
 		!slices.Equal(series["operating_data.oxygen"], actual) ||
@@ -195,8 +200,39 @@ func TestPerformanceHistoryAlignsReadingsAndKeepsInactiveTargetGaps(t *testing.T
 		t.Fatalf("unexpected performance history: %v", series)
 	}
 	legacy := read("/api/history/combustion")
-	if len(legacy) != 2 || !slices.Equal(legacy["operating_data.oxygen"], actual) || !slices.Equal(legacy["operating_data.oxygen_ref"], target) {
+	legacyTarget := []point{{first.Unix(), 10}, {first.Add(3 * time.Minute).Unix(), 12}}
+	if len(legacy) != 2 || !slices.Equal(legacy["operating_data.oxygen"], actual) || !slices.Equal(legacy["operating_data.oxygen_ref"], legacyTarget) {
 		t.Fatalf("unexpected combustion history: %v", legacy)
+	}
+}
+
+func TestOutdoorWeatherFahrenheitOnlyConvertsWeatherFeed(t *testing.T) {
+	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), Options{OutdoorWeatherFahrenheit: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ui.Close() })
+	readings := map[string]any{"outdoor_temp": int64(50), "external_temp": int64(6)}
+	ui.Observe(t.Context(), "operating_data", readings)
+	ui.Observe(t.Context(), "advanced_data", map[string]any{"outdoor_temp": int64(999)})
+	for _, stream := range []bool{false, true} {
+		status, _ := ui.statusSnapshot(stream)
+		if status.Data["operating_data"].Values["outdoor_temp"] != float64(10) ||
+			status.Data["operating_data"].Values["external_temp"] != int64(6) ||
+			status.Data["advanced_data"].Values["outdoor_temp"] != int64(999) || readings["outdoor_temp"] != int64(50) {
+			t.Fatalf("unexpected weather normalization: %+v", status.Data)
+		}
+	}
+	result := httptest.NewRecorder()
+	ui.Handler().ServeHTTP(result, httptest.NewRequest(http.MethodGet,
+		"/api/history?series=operating_data.outdoor_temp&series=operating_data.external_temp", nil))
+	var series map[string][]point
+	if err := json.Unmarshal(result.Body.Bytes(), &series); err != nil || result.Code != http.StatusOK {
+		t.Fatalf("outdoor weather history status %d: %s, %v", result.Code, result.Body, err)
+	}
+	outdoor, sensor := series["operating_data.outdoor_temp"], series["operating_data.external_temp"]
+	if len(outdoor) != 1 || outdoor[0].Value != 10 || len(sensor) != 1 || sensor[0].Value != 6 {
+		t.Fatalf("unexpected weather history conversion: %v", series)
 	}
 }
 
@@ -232,7 +268,7 @@ func TestTrip2VerifiesControllerReadback(t *testing.T) {
 				fixture.value = check.value
 				return nil
 			}
-			ui, err := New(t.Context(), slog.Default(), fixture, "TEST", t.TempDir(), write)
+			ui, err := New(t.Context(), slog.Default(), fixture, "TEST", t.TempDir(), Options{Write: write})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -265,7 +301,7 @@ func TestVendorOptionsRespectControllerRange(t *testing.T) {
 }
 
 func TestUnifiedEventFilters(t *testing.T) {
-	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), nil)
+	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +349,7 @@ func TestUnifiedEventFilters(t *testing.T) {
 }
 
 func TestStatusStream(t *testing.T) {
-	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), nil)
+	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +371,7 @@ func TestStatusStream(t *testing.T) {
 		t.Fatalf("unexpected stream response: %s %v", response.Status, response.Header)
 	}
 	reader := bufio.NewReader(response.Body)
-	readEvent := func(want float64, revision uint64) {
+	readEvent := func(want float64, revision uint64, fahrenheit bool) {
 		t.Helper()
 		line, err := reader.ReadString('\n')
 		value, ok := strings.CutPrefix(strings.TrimSpace(line), "data: ")
@@ -347,20 +383,23 @@ func TestStatusStream(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := status.Data["operating_data"].Values["boiler_temp"]; got != want || status.EventRevision != revision ||
-			!status.Online || status.Control || len(status.Data) != 1 {
+			status.Fahrenheit != fahrenheit || !status.Online || status.Control || len(status.Data) != 1 {
 			t.Fatalf("unexpected dashboard status: %+v", status)
 		}
 		if separator, err := reader.ReadString('\n'); separator != "\n" || err != nil {
 			t.Fatalf("invalid event separator %q: %v", separator, err)
 		}
 	}
-	readEvent(42, 0)
+	readEvent(42, 0, false)
 	time.Sleep(250 * time.Millisecond)
 	ui.Observe(t.Context(), "operating_data", map[string]any{"boiler_temp": int64(43)})
-	readEvent(43, 0)
+	readEvent(43, 0, false)
+
+	ui.Observe(t.Context(), "misc", map[string]any{"fahrenheit": int64(1)})
+	readEvent(43, 0, true)
 
 	ui.addEvent(t.Context(), time.Now(), "info", "New fixture notice")
-	readEvent(43, 1)
+	readEvent(43, 1, true)
 
 	mark := httptest.NewRequest(http.MethodPost, "/api/notifications/1/read", nil)
 	mark.Header.Set("X-Boiler-Mate", "1")
@@ -369,11 +408,11 @@ func TestStatusStream(t *testing.T) {
 	if marked.Code != http.StatusNoContent {
 		t.Fatalf("could not mark the notice read: %d %s", marked.Code, marked.Body.String())
 	}
-	readEvent(43, 2)
+	readEvent(43, 2, true)
 }
 
 func TestDesktopNoticeStream(t *testing.T) {
-	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), nil)
+	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

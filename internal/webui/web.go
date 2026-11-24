@@ -29,13 +29,19 @@ type controller interface {
 
 type WriteFunc func(context.Context, string, []byte) error
 
+type Options struct {
+	Write                    WriteFunc
+	OutdoorWeatherFahrenheit bool
+}
+
 type UI struct {
-	controller controller
-	write      WriteFunc
-	store      *store
-	logger     *slog.Logger
-	serial     string
-	push       *webPush
+	controller               controller
+	write                    WriteFunc
+	store                    *store
+	logger                   *slog.Logger
+	serial                   string
+	push                     *webPush
+	outdoorWeatherFahrenheit bool
 
 	settingsMu   sync.Mutex
 	mu           sync.RWMutex
@@ -45,6 +51,7 @@ type UI struct {
 	eventChanged chan struct{}
 	historyRev   uint64
 	eventRev     uint64
+	fahrenheit   bool
 	lastState    string
 	lastInfo     string
 	offline      bool
@@ -55,7 +62,7 @@ type snapshot struct {
 	Values map[string]any `json:"values"`
 }
 
-func New(ctx context.Context, logger *slog.Logger, boiler controller, serial, dataDir string, write WriteFunc) (*UI, error) {
+func New(ctx context.Context, logger *slog.Logger, boiler controller, serial, dataDir string, options Options) (*UI, error) {
 	store, err := openStore(ctx, dataDir)
 	if err != nil {
 		return nil, err
@@ -65,9 +72,10 @@ func New(ctx context.Context, logger *slog.Logger, boiler controller, serial, da
 		return nil, errors.Join(fmt.Errorf("initialize web push: %w", err), store.db.Close())
 	}
 	return &UI{
-		controller: boiler, write: write, store: store, logger: logger, serial: serial,
-		push:      push,
-		snapshots: make(map[string]snapshot), lastSample: make(map[string]time.Time),
+		controller: boiler, write: options.Write, store: store, logger: logger, serial: serial,
+		push:                     push,
+		outdoorWeatherFahrenheit: options.OutdoorWeatherFahrenheit,
+		snapshots:                make(map[string]snapshot), lastSample: make(map[string]time.Time),
 		changed: make(chan struct{}), eventChanged: make(chan struct{}),
 	}, nil
 }
@@ -90,7 +98,13 @@ func (ui *UI) Observe(ctx context.Context, topic string, values map[string]any) 
 	ui.mu.Lock()
 	ui.snapshots[topic] = snapshot{At: now, Values: values}
 	isTelemetry := topic == "operating_data" || topic == "advanced_data"
-	if isTelemetry {
+	var unitChanged bool
+	if topic == "misc" {
+		fahrenheit := sameSettingValue("1", values["fahrenheit"])
+		unitChanged = fahrenheit != ui.fahrenheit
+		ui.fahrenheit = fahrenheit
+	}
+	if isTelemetry || unitChanged {
 		ui.signalChange()
 	}
 	sample := isTelemetry && now.Truncate(time.Minute) != ui.lastSample[topic]
@@ -297,14 +311,23 @@ func (ui *UI) getHistory(w http.ResponseWriter, r *http.Request) {
 			ui.serverError(w, "read history", err)
 			return
 		}
+		if ui.outdoorWeatherFahrenheit && (key == "operating_data.outdoor_temp" || key == "advanced_data.outdoor_temp") {
+			for i := range points {
+				points[i].Value = fahrenheitToCelsius(points[i].Value)
+			}
+		}
 		series[key] = points
 	}
 	writeJSON(w, series)
 }
 
+func fahrenheitToCelsius(value float64) float64 {
+	return (value - 32) * 5 / 9
+}
+
 func (ui *UI) performanceHistoryHandler(oxygenOnly bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		series, err := ui.store.performanceHistory(r.Context(), time.Now())
+		series, err := ui.store.performanceHistory(r.Context(), time.Now(), !oxygenOnly)
 		if err != nil {
 			ui.serverError(w, "read performance history", err)
 			return
