@@ -24,7 +24,9 @@ func (readOnlyFixture) Get(_ context.Context, function nbe.Function, path string
 		switch path {
 		case "alarm.*", "alarm.output":
 			payload = map[string]any{"output": int64(0)}
-		case "hopper.*", "hopper.trip2":
+		case "hopper.*":
+			payload = map[string]any{"trip2": int64(0), "fixed_counter": int64(0)}
+		case "hopper.trip2":
 			payload = map[string]any{"trip2": int64(0)}
 		case "misc.expansion_module":
 			payload = map[string]any{"expansion_module": int64(0)}
@@ -38,7 +40,12 @@ func (readOnlyFixture) Get(_ context.Context, function nbe.Function, path string
 		case strings.HasPrefix(path, "hopper."):
 			key, maximum, defaultValue = "trip2", 0, 0
 		}
-		return &nbe.NBEResponse{Payload: map[string]any{key: map[string]any{"min": int64(0), "max": maximum, "default": defaultValue, "decimals": int64(0)}}}, nil
+		record := map[string]any{"min": int64(0), "max": maximum, "default": defaultValue, "decimals": int64(0)}
+		payload := map[string]any{key: record}
+		if path == "hopper.*" {
+			payload["fixed_counter"] = record
+		}
+		return &nbe.NBEResponse{Payload: payload}, nil
 	case nbe.GetConsumptionDataFunction:
 		return &nbe.NBEResponse{Payload: map[string]any{path: "0.0,1.2,2.3"}}, nil
 	default:
@@ -77,7 +84,7 @@ func TestControllerAPIReadOnlyChecks(t *testing.T) {
 		{"PUT", "/api/settings/boiler/temp", `{"current":"60","value":"60"}`, false, true, 204},
 		{"PUT", "/api/settings/alarm/output", `{"current":"0","value":"4"}`, false, true, 422},
 		{"PUT", "/api/settings/alarm/output", `{"current":"0","value":"14"}`, false, true, 422},
-		{"PUT", "/api/settings/hopper/trip2", `{"current":"0","value":"1"}`, false, true, 422},
+		{"PUT", "/api/settings/hopper/trip2", `{"current":"0","value":"30001"}`, false, true, 422},
 		{"POST", "/api/power", `{"action":"anything else"}`, false, true, 400},
 	} {
 		t.Run(tc.method+tc.path+tc.body, func(t *testing.T) {
@@ -117,8 +124,9 @@ func TestControllerAPIReadOnlyChecks(t *testing.T) {
 			}
 			if tc.path == "/api/settings/hopper" {
 				var data []field
-				if err := json.Unmarshal(result.Body.Bytes(), &data); err != nil || len(data) != 1 || !data[0].Fixed || data[0].Range != nil {
-					t.Fatalf("expected a fixed Trip 2 counter: %+v, %v", data, err)
+				if err := json.Unmarshal(result.Body.Bytes(), &data); err != nil || len(data) != 2 || !data[0].Fixed || data[0].Range != nil ||
+					data[1].Key != "trip2" || data[1].Fixed || data[1].Range == nil || data[1].Range.Max != 30000 {
+					t.Fatalf("expected only Trip 2 to use the fallback range: %+v, %v", data, err)
 				}
 			}
 		})
@@ -131,6 +139,57 @@ func TestControllerAPIReadOnlyChecks(t *testing.T) {
 	points, err = ui.store.history(t.Context(), "operating_data.dhw_temp", from, to)
 	if err != nil || len(points) != 0 {
 		t.Fatalf("disconnected sensor was recorded: %v, %v", points, err)
+	}
+}
+
+type trip2Fixture struct {
+	readOnlyFixture
+	value int64
+}
+
+func (fixture *trip2Fixture) Get(ctx context.Context, function nbe.Function, path string) (*nbe.NBEResponse, error) {
+	if function == nbe.GetSetupFunction && path == "hopper.trip2" {
+		return &nbe.NBEResponse{Payload: map[string]any{"trip2": fixture.value}}, nil
+	}
+	return fixture.readOnlyFixture.Get(ctx, function, path)
+}
+
+func TestTrip2VerifiesControllerReadback(t *testing.T) {
+	for _, check := range []struct {
+		name  string
+		value int64
+		want  int
+	}{
+		{"change confirmed", 123, http.StatusNoContent},
+		{"value still reads zero", 0, http.StatusConflict},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			fixture := &trip2Fixture{}
+			writes := 0
+			write := func(_ context.Context, key string, value []byte) error {
+				if key != "hopper.trip2" || string(value) != "123" {
+					t.Fatalf("unexpected simulated write %q = %q", key, value)
+				}
+				writes++
+				fixture.value = check.value
+				return nil
+			}
+			ui, err := New(t.Context(), slog.Default(), fixture, "TEST", t.TempDir(), write)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = ui.Close() })
+			ui.Observe(t.Context(), "operating_data", map[string]any{"boiler_temp": int64(60)})
+			ui.Observe(t.Context(), "hopper", map[string]any{"trip2": int64(0)})
+			request := httptest.NewRequest(http.MethodPut, "/api/settings/hopper/trip2", strings.NewReader(`{"current":"0","value":"123"}`))
+			request.Header.Set("X-Boiler-Mate", "1")
+			request.Header.Set("Content-Type", "application/json")
+			result := httptest.NewRecorder()
+			ui.Handler().ServeHTTP(result, request)
+			if result.Code != check.want || writes != 1 || !ui.snapshots["hopper"].At.IsZero() {
+				t.Fatalf("status %d, writes %d, body %s", result.Code, writes, result.Body.String())
+			}
+		})
 	}
 }
 

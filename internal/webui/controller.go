@@ -82,7 +82,10 @@ func (ui *UI) getSettings(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		label, help := settingDescription(group, key)
-		bounds := readRange(ranges.Payload, key)
+		bounds, trip2Fallback := settingBounds(group, key, ranges.Payload)
+		if trip2Fallback {
+			help += " Uses StokerCloud's edit range when the controller reports 0–0 kg."
+		}
 		fixed := bounds != nil && bounds.Min == bounds.Max
 		if fixed {
 			bounds = nil
@@ -110,6 +113,15 @@ func readRange(payload map[string]any, key string) *settingRange {
 		return nil
 	}
 	return &settingRange{Min: minimum, Max: maximum, Default: defaultValue, Decimals: int(decimals)}
+}
+
+func settingBounds(group, key string, payload map[string]any) (*settingRange, bool) {
+	bounds := readRange(payload, key)
+	// StokerCloud allows editing Trip 2 even when this firmware advertises a zero range.
+	if group == "hopper" && key == "trip2" && bounds != nil && *bounds == (settingRange{}) {
+		return &settingRange{Max: 30000}, true
+	}
+	return bounds, false
 }
 
 func isTimer(group, key string) bool {
@@ -175,8 +187,9 @@ func (ui *UI) putSetting(w http.ResponseWriter, r *http.Request) {
 	ranges, err := ui.controller.Get(r.Context(), nbe.GetSetupRangeFunction, path)
 	timer := isTimer(group, key)
 	var bounds *settingRange
+	var trip2Fallback bool
 	if err == nil {
-		bounds = readRange(ranges.Payload, key)
+		bounds, trip2Fallback = settingBounds(group, key, ranges.Payload)
 	}
 	if !validSettingValue(change.Value, bounds, timer) {
 		problem(w, http.StatusUnprocessableEntity, "The value is outside the controller's editable range.")
@@ -201,7 +214,35 @@ func (ui *UI) putSetting(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	ui.send(w, r, path, change.Value)
+	if !ui.sendCommand(w, r, path, change.Value) {
+		return
+	}
+	if trip2Fallback && !ui.verifyTrip2(w, r, change.Value) {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (ui *UI) verifyTrip2(w http.ResponseWriter, r *http.Request, value string) bool {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	ui.mu.Lock()
+	hopper := ui.snapshots["hopper"]
+	hopper.At = time.Time{}
+	ui.snapshots["hopper"] = hopper
+	ui.mu.Unlock()
+	response, err := ui.controller.Get(ctx, nbe.GetSetupFunction, "hopper.trip2")
+	if err == nil {
+		if reported, ok := response.Payload["trip2"]; ok {
+			if sameSettingValue(value, reported) {
+				return true
+			}
+			problem(w, http.StatusConflict, fmt.Sprintf("The controller acknowledged the change, but Trip 2 still reads %v kg.", reported))
+			return false
+		}
+	}
+	problem(w, http.StatusServiceUnavailable, "The controller acknowledged the change, but Boiler Mate could not confirm the new Trip 2 value.")
+	return false
 }
 
 func sameSettingValue(input string, actual any) bool {
@@ -258,20 +299,26 @@ func (ui *UI) allowControl(w http.ResponseWriter) bool {
 }
 
 func (ui *UI) send(w http.ResponseWriter, r *http.Request, key, value string) {
+	if ui.sendCommand(w, r, key, value) {
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func (ui *UI) sendCommand(w http.ResponseWriter, r *http.Request, key, value string) bool {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	if err := ui.write(ctx, key, []byte(value)); err != nil {
 		var rejected *nbe.ResponseError
 		if errors.As(err, &rejected) {
 			problem(w, http.StatusUnprocessableEntity, rejected.Error())
-			return
+			return false
 		}
 		ui.logger.Warn("Controller did not acknowledge web command", "setting", key, "error", err)
 		problem(w, http.StatusServiceUnavailable, "The controller did not acknowledge the command. Check the current value before retrying.")
-		return
+		return false
 	}
 	ui.addEvent(ctx, time.Now(), "command", "Controller acknowledged "+strings.ReplaceAll(key, "_", " ")+".")
-	w.WriteHeader(http.StatusNoContent)
+	return true
 }
 
 func (ui *UI) getConsumption(w http.ResponseWriter, r *http.Request) {
