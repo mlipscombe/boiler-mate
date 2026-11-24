@@ -2,8 +2,6 @@ package webui
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -37,8 +35,6 @@ type UI struct {
 	store      *store
 	logger     *slog.Logger
 	serial     string
-	password   [sha256.Size]byte
-	locked     bool
 
 	settingsMu sync.Mutex
 	mu         sync.RWMutex
@@ -54,17 +50,13 @@ type snapshot struct {
 	Values map[string]any `json:"values"`
 }
 
-func New(ctx context.Context, logger *slog.Logger, boiler controller, serial, dataDir, password string, write WriteFunc) (*UI, error) {
+func New(ctx context.Context, logger *slog.Logger, boiler controller, serial, dataDir string, write WriteFunc) (*UI, error) {
 	store, err := openStore(ctx, dataDir)
 	if err != nil {
 		return nil, err
 	}
-	if password == "" {
-		write = nil
-	}
 	return &UI{
 		controller: boiler, write: write, store: store, logger: logger, serial: serial,
-		password: sha256.Sum256([]byte(password)), locked: password != "",
 		snapshots: make(map[string]snapshot), lastSample: make(map[string]time.Time),
 	}, nil
 }
@@ -213,15 +205,6 @@ func (ui *UI) Handler() http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
-		if ui.locked {
-			username, password, _ := r.BasicAuth()
-			hash := sha256.Sum256([]byte(password))
-			if username != "boiler" || subtle.ConstantTimeCompare(hash[:], ui.password[:]) != 1 {
-				w.Header().Set("WWW-Authenticate", `Basic realm="Boiler Mate", charset="UTF-8"`)
-				http.Error(w, "Authentication required", http.StatusUnauthorized)
-				return
-			}
-		}
 		switch r.Method {
 		case http.MethodGet, http.MethodHead:
 		default:
@@ -243,7 +226,7 @@ func (ui *UI) getStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{
 		"serial": ui.serial, "data": data,
 		"online":  !status.At.IsZero() && time.Since(status.At) < 20*time.Second,
-		"control": ui.write != nil, "lock": ui.locked,
+		"control": ui.write != nil,
 	})
 }
 
@@ -308,10 +291,6 @@ func (ui *UI) listEvents(w http.ResponseWriter, r *http.Request, notices bool) {
 }
 
 func (ui *UI) markRead(w http.ResponseWriter, r *http.Request) {
-	if !ui.locked {
-		problem(w, http.StatusForbidden, "Enable web authentication to acknowledge messages.")
-		return
-	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
 		problem(w, http.StatusBadRequest, "Invalid event identifier.")

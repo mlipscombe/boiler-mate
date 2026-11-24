@@ -33,7 +33,7 @@ func TestControllerAPIReadOnlyChecks(t *testing.T) {
 		t.Fatal("the read-only verification attempted to write a controller setting")
 		return nil
 	}
-	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), "test-password", write)
+	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), write)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,23 +43,23 @@ func TestControllerAPIReadOnlyChecks(t *testing.T) {
 	handler := ui.Handler()
 	for _, tc := range []struct {
 		method, path, body string
-		auth, header       bool
+		crossSite, header  bool
 		want               int
 	}{
-		{"GET", "/api/status", "", false, false, 401},
-		{"GET", "/api/status", "", true, false, 200},
-		{"GET", "/api/settings/boiler", "", true, false, 200},
-		{"GET", "/api/consumption?period=days", "", true, false, 200},
-		{"PUT", "/api/settings/boiler/temp", `{"current":"60","value":"77"}`, true, false, 403},
-		{"PUT", "/api/settings/boiler/temp", `{"current":"59","value":"77"}`, true, true, 409},
-		{"PUT", "/api/settings/boiler/temp", `{"current":"60","value":"900"}`, true, true, 422},
-		{"PUT", "/api/settings/boiler/temp", `{"current":"60","value":"60"}`, true, true, 204},
-		{"POST", "/api/power", `{"action":"anything else"}`, true, true, 400},
+		{"GET", "/api/status", "", false, false, 200},
+		{"GET", "/api/settings/boiler", "", false, false, 200},
+		{"GET", "/api/consumption?period=days", "", false, false, 200},
+		{"PUT", "/api/settings/boiler/temp", `{"current":"60","value":"77"}`, false, false, 403},
+		{"PUT", "/api/settings/boiler/temp", `{"current":"60","value":"78"}`, true, true, 403},
+		{"PUT", "/api/settings/boiler/temp", `{"current":"59","value":"77"}`, false, true, 409},
+		{"PUT", "/api/settings/boiler/temp", `{"current":"60","value":"900"}`, false, true, 422},
+		{"PUT", "/api/settings/boiler/temp", `{"current":"60","value":"60"}`, false, true, 204},
+		{"POST", "/api/power", `{"action":"anything else"}`, false, true, 400},
 	} {
 		t.Run(tc.method+tc.path+tc.body, func(t *testing.T) {
 			request := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
-			if tc.auth {
-				request.SetBasicAuth("boiler", "test-password")
+			if tc.crossSite {
+				request.Header.Set("Sec-Fetch-Site", "cross-site")
 			}
 			if tc.header {
 				request.Header.Set("X-Boiler-Mate", "1")
@@ -71,6 +71,9 @@ func TestControllerAPIReadOnlyChecks(t *testing.T) {
 			handler.ServeHTTP(result, request)
 			if result.Code != tc.want || strings.Contains(result.Body.String(), "LOCAL_TEST_SECRET") {
 				t.Fatalf("status %d body %s, want %d", result.Code, result.Body.String(), tc.want)
+			}
+			if tc.path == "/api/status" && !strings.Contains(result.Body.String(), `"control":true`) {
+				t.Fatalf("controller writes were disabled: %s", result.Body.String())
 			}
 			if tc.path == "/api/settings/boiler" {
 				var data []field

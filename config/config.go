@@ -38,7 +38,6 @@ type Config struct {
 	HADiscovery bool
 	WebBind     string
 	WebData     string
-	WebPassword string
 }
 
 func Load(args []string, output io.Writer) (Config, error) {
@@ -96,7 +95,6 @@ func Load(args []string, output io.Writer) (Config, error) {
 	if cfg.WebBind != "false" && strings.TrimSpace(cfg.WebData) == "" {
 		return cfg, errors.New("web data directory is required")
 	}
-	cfg.WebPassword = os.Getenv("BOILER_MATE_WEB_PASSWORD")
 	cfg.LogLevel = parseLevel(*logLevel)
 	return cfg, nil
 }
