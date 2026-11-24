@@ -18,58 +18,153 @@
 package config
 
 import (
+	"errors"
 	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/url"
 	"os"
-
-	log "github.com/sirupsen/logrus"
+	"strconv"
+	"strings"
 )
 
-// Config holds application configuration
 type Config struct {
-	LogLevel      string
-	Bind          string
-	ControllerURL string
-	MQTTURL       string
-	HADiscovery   bool
+	LogLevel    slog.Level
+	Bind        string
+	Controller  *url.URL
+	MQTT        *url.URL
+	HADiscovery bool
+	WebBind     string
+	WebData     string
+	WebPassword string
 }
 
-// Load parses command-line flags and environment variables
-func Load() *Config {
-	cfg := &Config{}
-
-	flag.StringVar(&cfg.LogLevel, "log-level", lookupEnvOrString("BOILER_MATE_LOG_LEVEL", "INFO"), "logging level")
-	flag.StringVar(&cfg.Bind, "bind", lookupEnvOrString("BOILER_MATE_BIND", "0.0.0.0:2112"), "address to bind for healthz and prometheus metrics endpoints (default 0.0.0.0:2112), or \"false\" to disable")
-	flag.StringVar(&cfg.ControllerURL, "controller", lookupEnvOrString("BOILER_MATE_CONTROLLER", "tcp://00000:0123456789@192.168.1.100:8483"), "controller URI, in the format tcp://<serial>:<password>@<host>:<port>")
-	flag.StringVar(&cfg.MQTTURL, "mqtt", lookupEnvOrString("BOILER_MATE_MQTT", "mqtt[s]://localhost:1883"), "MQTT URI, in the format mqtt[s]://[<user>:<password>]@<host>:<port>[/<prefix>]")
-	flag.BoolVar(&cfg.HADiscovery, "homeassistant", lookupEnvOrBool("BOILER_MATE_HOMEASSISTANT", true), "enable Home Assistant autodiscovery (default: true)")
-	flag.Parse()
-
-	return cfg
-}
-
-// SetupLogging configures the logging level
-func (cfg *Config) SetupLogging() {
-	log.SetFormatter(&log.TextFormatter{})
-	ll, err := log.ParseLevel(cfg.LogLevel)
+func Load(args []string, output io.Writer) (Config, error) {
+	var cfg Config
+	flags := flag.NewFlagSet("boiler-mate", flag.ContinueOnError)
+	flags.SetOutput(output)
+	logLevel := flags.String("log-level", lookupEnvOrString("BOILER_MATE_LOG_LEVEL", "info"), "logging level")
+	flags.StringVar(&cfg.Bind, "bind", lookupEnvOrString("BOILER_MATE_BIND", "0.0.0.0:2112"), "health and metrics listen address, or false")
+	// Keep the historical controller default without listing a PIN in help.
+	controller := flags.String("controller", "", "controller URI, udp://[serial[:password]@]host:port")
+	mqtt := flags.String("mqtt", "", "broker URI, mqtt[s]://[user:password@]host[:port][/prefix]")
+	flags.BoolVar(&cfg.HADiscovery, "homeassistant", lookupEnvOrBool("BOILER_MATE_HOMEASSISTANT", true), "enable Home Assistant discovery")
+	flags.StringVar(&cfg.WebBind, "web-bind", lookupEnvOrString("BOILER_MATE_WEB_BIND", "false"), "web interface listen address, or false")
+	flags.StringVar(&cfg.WebData, "web-data", lookupEnvOrString("BOILER_MATE_WEB_DATA", "boiler-mate-data"), "web interface data directory")
+	if err := flags.Parse(args); err != nil {
+		return cfg, err
+	}
+	if flags.NArg() != 0 {
+		return cfg, errors.New("unexpected positional arguments")
+	}
+	// Apply defaults only when the flag was absent, including explicitly empty flags.
+	set := make(map[string]bool)
+	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	if !set["controller"] {
+		*controller = lookupEnvOrString("BOILER_MATE_CONTROLLER", "tcp://00000:0123456789@192.168.1.100:8483")
+	}
+	if !set["mqtt"] {
+		*mqtt = lookupEnvOrString("BOILER_MATE_MQTT", "mqtt://localhost:1883")
+	}
+	var err error
+	cfg.Controller, err = parseURL(*controller, "controller", "udp", "tcp")
 	if err != nil {
-		ll = log.InfoLevel
+		return cfg, err
 	}
-	log.SetLevel(ll)
-}
-
-func lookupEnvOrString(key string, defaultVal string) string {
-	if val, ok := os.LookupEnv(key); ok {
-		return val
+	if cfg.Controller.Port() == "" {
+		return cfg, errors.New("controller URL requires a port")
 	}
-	return defaultVal
-}
-
-func lookupEnvOrBool(key string, defaultVal bool) bool {
-	if val, ok := os.LookupEnv(key); ok {
-		if val == "true" || val == "1" || val == "yes" {
-			return true
+	if pin, _ := cfg.Controller.User.Password(); len(pin) > 10 {
+		return cfg, errors.New("controller password exceeds the NBE PIN length")
+	}
+	cfg.MQTT, err = parseURL(*mqtt, "MQTT", "mqtt", "mqtts", "tcp")
+	if err != nil {
+		return cfg, err
+	}
+	if strings.ContainsAny(cfg.MQTT.Path, "+#\x00") {
+		return cfg, errors.New("invalid MQTT topic prefix")
+	}
+	for _, addr := range []struct{ name, value string }{{"bind", cfg.Bind}, {"web-bind", cfg.WebBind}} {
+		if addr.value != "false" {
+			if err := validateBind(addr.value); err != nil {
+				return cfg, fmt.Errorf("invalid %s address: %w", addr.name, err)
+			}
 		}
-		return false
 	}
-	return defaultVal
+	if cfg.WebBind != "false" && strings.TrimSpace(cfg.WebData) == "" {
+		return cfg, errors.New("web data directory is required")
+	}
+	cfg.WebPassword = os.Getenv("BOILER_MATE_WEB_PASSWORD")
+	cfg.LogLevel = parseLevel(*logLevel)
+	return cfg, nil
+}
+
+func parseURL(value, name string, schemes ...string) (*url.URL, error) {
+	uri, err := url.Parse(value)
+	if err != nil || uri.Hostname() == "" || uri.Fragment != "" {
+		return nil, fmt.Errorf("invalid %s URL", name)
+	}
+	allowed := false
+	for _, scheme := range schemes {
+		allowed = allowed || uri.Scheme == scheme
+	}
+	if !allowed {
+		return nil, fmt.Errorf("unsupported %s URL scheme", name)
+	}
+	if port := uri.Port(); port != "" {
+		number, err := strconv.ParseUint(port, 10, 16)
+		if err != nil || number == 0 {
+			return nil, fmt.Errorf("invalid %s port", name)
+		}
+	}
+	if _, err := url.ParseQuery(uri.RawQuery); err != nil {
+		return nil, fmt.Errorf("invalid %s URL query", name)
+	}
+	return uri, nil
+}
+
+func validateBind(address string) error {
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return errors.New("expected host:port")
+	}
+	if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+		return errors.New("expected a numeric port")
+	}
+	return nil
+}
+
+func parseLevel(value string) slog.Level {
+	switch strings.ToLower(value) {
+	case "trace":
+		return slog.LevelDebug - 4
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	case "fatal":
+		return slog.LevelError + 4
+	case "panic":
+		return slog.LevelError + 8
+	default:
+		return slog.LevelInfo
+	}
+}
+
+func lookupEnvOrString(key string, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
+}
+
+func lookupEnvOrBool(key string, fallback bool) bool {
+	if value, ok := os.LookupEnv(key); ok {
+		return value == "true" || value == "1" || value == "yes"
+	}
+	return fallback
 }

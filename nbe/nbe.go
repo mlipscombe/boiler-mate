@@ -19,301 +19,298 @@ package nbe
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"math/big"
 	"net"
+	"net/netip"
 	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
-
-	log "github.com/sirupsen/logrus"
 )
 
-func randomString(len int) (string, error) {
-	bytes := make([]byte, len)
-	for i := 0; i < len; i++ {
-		nBig, err := rand.Int(rand.Reader, big.NewInt(25))
-		if err != nil {
-			return "", err
-		}
-		bytes[i] = byte(65 + nBig.Int64()) //A=65 and Z = 65+25
-	}
-	return string(bytes), nil
-}
+const (
+	requestTimeout = 3 * time.Second
+	sequenceCount  = 100
+)
 
+// NBE is a UDP client for a single controller.
 type NBE struct {
-	URI          *url.URL
-	AppID        string
-	ControllerID string
-	Serial       string
-	IPAddress    string
-	SeqNo        int8
-	PinCode      string
-	RSAKey       *rsa.PublicKey // rsa key
+	Serial    string
+	IPAddress string
 
-	SettingSchema map[string]SettingDefinition
-	Ready         chan bool
+	appID        string
+	controllerID string
+	pinCode      string
+	rsaKey       *rsa.PublicKey
 
-	listener   net.PacketConn
-	queue      map[int8]func(*NBEResponse)
-	queueMutex sync.RWMutex
+	conn *net.UDPConn
+	peer netip.AddrPort
+	done chan struct{}
+
+	mu      sync.Mutex
+	next    int
+	pending [sequenceCount]*pendingRequest
+	reuseAt [sequenceCount]time.Time
+	readErr error
 }
 
-func NewNBE(uri *url.URL) (*NBE, error) {
-	appID, err := randomString(12)
+type pendingRequest struct {
+	function Function
+	response chan *NBEResponse
+}
+
+// Open discovers the controller and loads its RSA key on the same UDP socket
+// used for subsequent polling and writes.
+func Open(ctx context.Context, uri *url.URL) (*NBE, error) {
+	if uri == nil || uri.Hostname() == "" || uri.Port() == "" {
+		return nil, errors.New("controller hostname and port are required")
+	}
+
+	addr, err := resolveController(ctx, uri)
 	if err != nil {
 		return nil, err
 	}
-	controllerID, err := randomString(6)
+	conn, err := net.ListenUDP("udp4", nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open controller socket: %w", err)
 	}
-	password, _ := uri.User.Password()
-	nbe := NBE{
-		URI:          uri,
-		AppID:        appID,
-		ControllerID: controllerID,
-		Serial:       uri.User.Username(),
+
+	pin, _ := uri.User.Password()
+	client := &NBE{
 		IPAddress:    uri.Hostname(),
-		PinCode:      password,
-		SeqNo:        0,
-		Ready:        make(chan bool),
-		queue:        make(map[int8]func(*NBEResponse)),
-		queueMutex:   sync.RWMutex{},
+		appID:        randomID(AppIDSize),
+		controllerID: randomID(ControllerIDSize),
+		pinCode:      pin,
+		conn:         conn,
+		peer:         addr,
+		done:         make(chan struct{}),
+		next:         1,
 	}
-	err = nbe.connect()
-	return &nbe, err
+	go client.listen()
+
+	if err := client.discover(ctx); err != nil {
+		client.Close()
+		return nil, err
+	}
+	return client, nil
 }
 
-func (nbe *NBE) listen() chan error {
-	// doneChan := make(chan error, 1)
-	defer nbe.listener.Close()
+func resolveController(ctx context.Context, uri *url.URL) (netip.AddrPort, error) {
+	port, err := strconv.ParseUint(uri.Port(), 10, 16)
+	if err != nil || port == 0 {
+		return netip.AddrPort{}, errors.New("invalid controller port")
+	}
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip4", uri.Hostname())
+	if err != nil {
+		return netip.AddrPort{}, fmt.Errorf("resolve controller host: %w", err)
+	}
+	if len(ips) == 0 {
+		return netip.AddrPort{}, errors.New("controller host has no IPv4 address")
+	}
+	return netip.AddrPortFrom(ips[0].Unmap(), uint16(port)), nil
+}
 
+func randomID(size int) string {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	id := make([]byte, 0, size)
+	// Reject bytes that would bias the distribution over the alphabet.
+	var sample [32]byte
+	for len(id) < size {
+		_, _ = rand.Read(sample[:])
+		for _, b := range sample {
+			if b < 234 {
+				id = append(id, alphabet[int(b)%len(alphabet)])
+				if len(id) == size {
+					break
+				}
+			}
+		}
+	}
+	return string(id)
+}
+
+func (client *NBE) discover(ctx context.Context) error {
+	response, err := client.Get(ctx, DiscoveryFunction, "NBE Discovery")
+	if err != nil {
+		return fmt.Errorf("discover controller: %w", err)
+	}
+	switch serial := response.Payload["serial"].(type) {
+	case string:
+		client.Serial = serial
+	case int64:
+		client.Serial = strconv.FormatInt(serial, 10)
+	}
+	if client.Serial == "" || strings.ContainsAny(client.Serial, "/+#\x00") {
+		return errors.New("controller returned an invalid serial number")
+	}
+
+	response, err = client.Get(ctx, GetSetupFunction, "misc.rsa_key")
+	if err != nil {
+		return fmt.Errorf("read controller RSA key: %w", err)
+	}
+	encoded, ok := response.Payload["rsa_key"].(string)
+	if !ok || encoded == "" {
+		return errors.New("controller response is missing its RSA key")
+	}
+	client.rsaKey, err = rsaKeyFromBase64(encoded)
+	return err
+}
+
+func (client *NBE) Close() {
+	_ = client.conn.Close()
+	<-client.done
+}
+
+func (client *NBE) listen() {
+	defer close(client.done)
+	const maxFrameSize = AppIDSize + ControllerIDSize + FunctionSize + SeqNoSize + StatusSize + PayloadLenSize + 999 + 2
+	buffer := make([]byte, maxFrameSize+1)
 	for {
-		buffer := make([]byte, 1024)
-
-		_, addr, err := nbe.listener.ReadFrom(buffer)
-		if addr.String() != nbe.URI.Host {
-			// ignore packets from other hosts
+		n, sender, err := client.conn.ReadFromUDPAddrPort(buffer)
+		if err != nil {
+			client.mu.Lock()
+			client.readErr = fmt.Errorf("read controller response: %w", err)
+			client.mu.Unlock()
+			return
+		}
+		if sender != client.peer || n > maxFrameSize {
 			continue
 		}
-		if err != nil {
-			log.Errorln(err)
+		var response NBEResponse
+		reader := bytes.NewReader(buffer[:n])
+		if err := response.Unpack(reader); err != nil || response.SeqNo < 0 || reader.Len() != 0 {
+			continue
 		}
-		go nbe.handle(buffer)
-	}
-
-	// return doneChan
-}
-
-func (nbe *NBE) handle(buffer []byte) {
-	var response NBEResponse
-	reader := bytes.NewReader(buffer)
-	err := response.Unpack(reader)
-	if err != nil {
-		log.Errorf("failed to unpack response: %s", err)
-		return
-	}
-
-	log.Debugf("recv %d %d %s", response.SeqNo, response.Function, response.Payload)
-
-	if response.SeqNo == -1 {
-		// Probably an error packet, log the payload.
-		log.Errorf("protocol error: %s", response.Payload["error"])
-		return
-	}
-
-	nbe.queueMutex.RLock()
-	if val, ok := nbe.queue[response.SeqNo]; ok {
-		nbe.queueMutex.RUnlock()
-		val(&response)
-		nbe.queueMutex.Lock()
-		delete(nbe.queue, response.SeqNo)
-		nbe.queueMutex.Unlock()
-	} else {
-		nbe.queueMutex.RUnlock()
-		log.Infof("sequence %d has no callback", response.SeqNo)
+		client.mu.Lock()
+		request := client.pending[response.SeqNo]
+		if request != nil && request.function == response.Function {
+			select {
+			case request.response <- &response:
+			default:
+			}
+		}
+		client.mu.Unlock()
 	}
 }
 
-func (nbe *NBE) connect() error {
-	listener, err := net.ListenPacket("udp4", "0.0.0.0:0")
-	if err != nil {
-		panic(err)
+func (client *NBE) reserve(request *pendingRequest) (int, error) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.readErr != nil {
+		return 0, client.readErr
 	}
-	nbe.listener = listener
-
-	go nbe.listen()
-
-	request := NBERequest{
-		AppID:        nbe.AppID,
-		ControllerID: nbe.ControllerID,
-		Function:     DiscoveryFunction,
-		Payload:      []byte("NBE Discovery"),
+	now := time.Now()
+	for range sequenceCount {
+		seq := client.next
+		client.next = (client.next + 1) % sequenceCount
+		if client.pending[seq] == nil && !now.Before(client.reuseAt[seq]) {
+			client.pending[seq] = request
+			return seq, nil
+		}
 	}
-
-	response, err := nbe.Send(&request)
-	if err != nil {
-		return err
-	}
-	nbe.Serial = fmt.Sprintf("%v", response.Payload["serial"])
-	pub, err := nbe.getRSAKey()
-	if err != nil {
-		return err
-	}
-	nbe.RSAKey = pub
-
-	return nil
+	return 0, errors.New("controller request sequence numbers are busy")
 }
 
-func (nbe *NBE) SendAsync(request *NBERequest, cb func(*NBEResponse)) (int8, error) {
-	var err error
-
-	nbe.queueMutex.Lock()
-	nbe.SeqNo++
-	if nbe.SeqNo > 99 {
-		nbe.SeqNo = 0
-	}
-	request.SeqNo = nbe.SeqNo
-	nbe.queueMutex.Unlock()
-
-	addr, err := net.ResolveUDPAddr("udp4", nbe.URI.Host)
-	if err != nil {
-		return request.SeqNo, err
-	}
-	packet := new(bytes.Buffer)
-	err = request.Pack(packet)
-	if err != nil {
-		return request.SeqNo, err
-	}
-
-	nbe.queueMutex.Lock()
-	nbe.queue[request.SeqNo] = cb
-	nbe.queueMutex.Unlock()
-
-	log.Debugf("send %d %d %s", request.SeqNo, request.Function, request.Payload)
-
-	_, err = nbe.listener.WriteTo(packet.Bytes(), addr)
-	if err != nil {
-		nbe.queueMutex.Lock()
-		delete(nbe.queue, request.SeqNo)
-		nbe.queueMutex.Unlock()
-
-		return request.SeqNo, err
-	}
-
-	return request.SeqNo, nil
+// ResponseError reports a controller rejection without including its payload.
+type ResponseError struct {
+	Function Function
+	Status   uint8
 }
 
-func (nbe *NBE) Send(request *NBERequest) (*NBEResponse, error) {
-	responseChan := make(chan *NBEResponse, 1)
+func (err *ResponseError) Error() string {
+	return fmt.Sprintf("controller rejected function %d with status %d", err.Function, err.Status)
+}
 
-	_, err := nbe.SendAsync(request, func(response *NBEResponse) {
-		responseChan <- response
-	})
+func (client *NBE) send(ctx context.Context, request NBERequest) (*NBEResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
+	pending := &pendingRequest{function: request.Function, response: make(chan *NBEResponse, 1)}
+	seq, err := client.reserve(pending)
 	if err != nil {
 		return nil, err
 	}
+	sent := false
+	defer func() {
+		client.mu.Lock()
+		client.pending[seq] = nil
+		if sent {
+			// Give late replies time to drain before the wire ID is reused.
+			client.reuseAt[seq] = time.Now().Add(requestTimeout)
+		}
+		client.mu.Unlock()
+	}()
+
+	request.AppID = client.appID
+	request.ControllerID = client.controllerID
+	request.SeqNo = int8(seq)
+	var packet bytes.Buffer
+	if err := request.Pack(&packet); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := client.conn.WriteToUDPAddrPort(packet.Bytes(), client.peer); err != nil {
+		return nil, fmt.Errorf("send controller request: %w", err)
+	}
+	sent = true
 
 	select {
-	case response := <-responseChan:
+	case response := <-pending.response:
+		if response.Status != 0 {
+			return nil, &ResponseError{Function: response.Function, Status: response.Status}
+		}
 		return response, nil
-	case <-time.After(time.Duration(3) * time.Second):
-		return nil, errors.New("timeout waiting for request")
+	case <-client.done:
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		return nil, client.readErr
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
-func (nbe *NBE) GetAsync(function Function, path string, cb func(*NBEResponse)) (int8, error) {
-	request := NBERequest{
-		AppID:        nbe.AppID,
-		ControllerID: nbe.ControllerID,
-		Function:     function,
-		Payload:      []byte(path),
-	}
-	seq, err := nbe.SendAsync(&request, cb)
-
-	return seq, err
+func (client *NBE) Get(ctx context.Context, function Function, path string) (*NBEResponse, error) {
+	return client.send(ctx, NBERequest{Function: function, Payload: []byte(path)})
 }
 
-func (nbe *NBE) Get(function Function, path string) (*NBEResponse, error) {
-	request := NBERequest{
-		AppID:        nbe.AppID,
-		ControllerID: nbe.ControllerID,
-		Function:     function,
-		Payload:      []byte(path),
+func (client *NBE) Set(ctx context.Context, path string, value []byte) (*NBEResponse, error) {
+	if client.pinCode == "" {
+		return nil, errors.New("a controller password is required for settings writes")
 	}
-
-	return nbe.Send(&request)
+	return client.send(ctx, NBERequest{
+		Function: SetSetupFunction,
+		RSAKey:   client.rsaKey,
+		PinCode:  client.pinCode,
+		Payload:  append([]byte(path+"="), value...),
+	})
 }
 
-func (nbe *NBE) SetAsync(path string, value []byte, cb func(*NBEResponse)) (int8, error) {
-	payload := new(bytes.Buffer)
-	payload.Write([]byte(path))
-	payload.Write([]byte("="))
-	payload.Write(value)
-
-	request := NBERequest{
-		AppID:        nbe.AppID,
-		ControllerID: nbe.ControllerID,
-		Function:     SetSetupFunction,
-		RSAKey:       nbe.RSAKey,
-		PinCode:      nbe.PinCode,
-		Payload:      payload.Bytes(),
-	}
-	seq, err := nbe.SendAsync(&request, cb)
-
-	return seq, err
-}
-
-func (nbe *NBE) Set(path string, value []byte) (*NBEResponse, error) {
-	payload := new(bytes.Buffer)
-	payload.Write([]byte(path))
-	payload.Write([]byte("="))
-	payload.Write(value)
-
-	request := NBERequest{
-		AppID:        nbe.AppID,
-		ControllerID: nbe.ControllerID,
-		Function:     SetSetupFunction,
-		RSAKey:       nbe.RSAKey,
-		PinCode:      nbe.PinCode,
-		Payload:      payload.Bytes(),
-	}
-
-	return nbe.Send(&request)
-}
-
-func (nbe *NBE) getRSAKey() (*rsa.PublicKey, error) {
-	if nbe.RSAKey != nil {
-		return nbe.RSAKey, nil
-	}
-
-	response, err := nbe.Get(GetSetupFunction, "misc.rsa_key")
+func rsaKeyFromBase64(encoded string) (*rsa.PublicKey, error) {
+	key, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("invalid base64 controller RSA key")
 	}
-
-	pub, err := rsaKeyFromBase64(response.Payload["rsa_key"].(string))
+	publicKey, err := x509.ParsePKIXPublicKey(key)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("invalid controller public key encoding")
 	}
-	return pub, nil
-}
-
-func rsaKeyFromBase64(key string) (*rsa.PublicKey, error) {
-	b, err := base64.StdEncoding.DecodeString(key)
-	if err != nil {
-		return nil, err
+	rsaKey, ok := publicKey.(*rsa.PublicKey)
+	if !ok || rsaKey.N == nil || rsaKey.N.Sign() <= 0 || rsaKey.E < 3 || rsaKey.E%2 == 0 {
+		return nil, errors.New("controller public key is not a valid RSA key")
 	}
-	pub, err := x509.ParsePKIXPublicKey(b)
-	if err != nil {
-		return nil, err
-	}
-	return pub.(*rsa.PublicKey), nil
+	return rsaKey, nil
 }

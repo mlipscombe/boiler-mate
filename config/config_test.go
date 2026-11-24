@@ -18,132 +18,39 @@
 package config
 
 import (
-	"os"
+	"io"
+	"strings"
 	"testing"
 )
 
-func TestLookupEnvOrString(t *testing.T) {
-	tests := []struct {
-		name         string
-		key          string
-		envValue     string
-		defaultVal   string
-		expected     string
-		shouldSetEnv bool
-	}{
-		{
-			name:         "returns default when env not set",
-			key:          "TEST_KEY_NOT_SET",
-			defaultVal:   "default_value",
-			expected:     "default_value",
-			shouldSetEnv: false,
-		},
-		{
-			name:         "returns env value when set",
-			key:          "TEST_KEY_SET",
-			envValue:     "env_value",
-			defaultVal:   "default_value",
-			expected:     "env_value",
-			shouldSetEnv: true,
-		},
+func TestLoadDefaultsAndOverrides(t *testing.T) {
+	t.Setenv("BOILER_MATE_MQTT", "mqtt://broker.local/test")
+	t.Setenv("BOILER_MATE_HOMEASSISTANT", "yes")
+	t.Setenv("BOILER_MATE_WEB_PASSWORD", "private")
+	cfg, err := Load([]string{"--controller", "udp://1234@boiler.local:8483", "--bind", "false", "--mqtt", "mqtts://another.local", "--homeassistant=false"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.shouldSetEnv {
-				os.Setenv(tt.key, tt.envValue)
-				defer os.Unsetenv(tt.key)
-			}
-
-			result := lookupEnvOrString(tt.key, tt.defaultVal)
-			if result != tt.expected {
-				t.Errorf("lookupEnvOrString() = %v, want %v", result, tt.expected)
-			}
-		})
+	if cfg.Controller.Host != "boiler.local:8483" || cfg.MQTT.Host != "another.local" || cfg.HADiscovery || cfg.Bind != "false" || cfg.WebBind != "false" || cfg.WebPassword != "private" {
+		t.Fatal("flags and environment were not applied in the expected order")
+	}
+	cfg, err = Load(nil, io.Discard)
+	if err != nil || cfg.MQTT.Host != "broker.local" || !cfg.HADiscovery {
+		t.Fatalf("expected environment overrides, got %v", err)
 	}
 }
 
-func TestLookupEnvOrBool(t *testing.T) {
-	tests := []struct {
-		name         string
-		key          string
-		envValue     string
-		defaultVal   bool
-		expected     bool
-		shouldSetEnv bool
-	}{
-		{
-			name:         "returns default when env not set",
-			key:          "TEST_BOOL_NOT_SET",
-			defaultVal:   true,
-			expected:     true,
-			shouldSetEnv: false,
-		},
-		{
-			name:         "returns true for 'true'",
-			key:          "TEST_BOOL_TRUE",
-			envValue:     "true",
-			defaultVal:   false,
-			expected:     true,
-			shouldSetEnv: true,
-		},
-		{
-			name:         "returns true for '1'",
-			key:          "TEST_BOOL_ONE",
-			envValue:     "1",
-			defaultVal:   false,
-			expected:     true,
-			shouldSetEnv: true,
-		},
-		{
-			name:         "returns true for 'yes'",
-			key:          "TEST_BOOL_YES",
-			envValue:     "yes",
-			defaultVal:   false,
-			expected:     true,
-			shouldSetEnv: true,
-		},
-		{
-			name:         "returns false for 'false'",
-			key:          "TEST_BOOL_FALSE",
-			envValue:     "false",
-			defaultVal:   true,
-			expected:     false,
-			shouldSetEnv: true,
-		},
-		{
-			name:         "returns false for any other value",
-			key:          "TEST_BOOL_OTHER",
-			envValue:     "whatever",
-			defaultVal:   true,
-			expected:     false,
-			shouldSetEnv: true,
-		},
+func TestLoadRedactsURLs(t *testing.T) {
+	for _, args := range [][]string{
+		{"--controller", "udp://1234:secret@%bogus:8483"},
+		{"--controller", "udp://1234:verylongsecret@boiler.local:8483"},
+		{"--mqtt", "unsupported://name:secret@host"},
+		{"--mqtt", "mqtt://name:secret@host:65536"},
+		{"--mqtt", "mqtt://name:secret@host/%23"},
+	} {
+		_, err := Load(args, io.Discard)
+		if err == nil || strings.Contains(err.Error(), "secret") {
+			t.Fatalf("expected a redacted validation error, got %v", err)
+		}
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.shouldSetEnv {
-				os.Setenv(tt.key, tt.envValue)
-				defer os.Unsetenv(tt.key)
-			}
-
-			result := lookupEnvOrBool(tt.key, tt.defaultVal)
-			if result != tt.expected {
-				t.Errorf("lookupEnvOrBool() = %v, want %v", result, tt.expected)
-			}
-		})
-	}
-}
-
-// Note: Tests that call Load() can only run once per test binary
-// due to flag.Parse() being called which cannot be reset.
-// These tests should be run separately or as integration tests.
-
-func TestConfigDefaults(t *testing.T) {
-	t.Skip("Skipping due to flag redefinition - run as integration test")
-}
-
-func TestConfigEnvironmentOverride(t *testing.T) {
-	t.Skip("Skipping due to flag redefinition - run as integration test")
 }

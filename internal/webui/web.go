@@ -1,0 +1,361 @@
+package webui
+
+import (
+	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"embed"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"log/slog"
+	"maps"
+	"mime"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/mlipscombe/boiler-mate/nbe"
+)
+
+//go:embed assets/*
+var assets embed.FS
+
+type controller interface {
+	Get(context.Context, nbe.Function, string) (*nbe.NBEResponse, error)
+}
+
+type WriteFunc func(context.Context, string, []byte) error
+
+type UI struct {
+	controller controller
+	write      WriteFunc
+	store      *store
+	logger     *slog.Logger
+	serial     string
+	password   [sha256.Size]byte
+	locked     bool
+
+	settingsMu sync.Mutex
+	mu         sync.RWMutex
+	snapshots  map[string]snapshot
+	lastSample map[string]time.Time
+	lastState  string
+	lastInfo   string
+	offline    bool
+}
+
+type snapshot struct {
+	At     time.Time      `json:"at"`
+	Values map[string]any `json:"values"`
+}
+
+func New(ctx context.Context, logger *slog.Logger, boiler controller, serial, dataDir, password string, write WriteFunc) (*UI, error) {
+	store, err := openStore(ctx, dataDir)
+	if err != nil {
+		return nil, err
+	}
+	if password == "" {
+		write = nil
+	}
+	return &UI{
+		controller: boiler, write: write, store: store, logger: logger, serial: serial,
+		password: sha256.Sum256([]byte(password)), locked: password != "",
+		snapshots: make(map[string]snapshot), lastSample: make(map[string]time.Time),
+	}, nil
+}
+
+func (ui *UI) Close() error {
+	return ui.store.db.Close()
+}
+
+// Observe receives the same real controller snapshots used for MQTT.
+func (ui *UI) Observe(ctx context.Context, topic string, values map[string]any) {
+	now := time.Now()
+	if topic == "misc" {
+		values = maps.Clone(values)
+		for key := range values {
+			if !visibleSetting(key) {
+				delete(values, key)
+			}
+		}
+	}
+	ui.mu.Lock()
+	ui.snapshots[topic] = snapshot{At: now, Values: values}
+	isTelemetry := topic == "operating_data" || topic == "advanced_data"
+	sample := isTelemetry && now.Truncate(time.Minute) != ui.lastSample[topic]
+	if sample {
+		ui.lastSample[topic] = now.Truncate(time.Minute)
+	}
+	var state, kind string
+	if topic == "operating_data" {
+		ui.offline = false
+		state, _ = values["state_text"].(string)
+		if state == ui.lastState {
+			state = ""
+		} else if state != "" {
+			ui.lastState = state
+			kind = "state"
+			description := strings.ToLower(state)
+			for _, marker := range []string{"alarm", "error", "fault", "fail", "overheat", "disconnected"} {
+				if strings.Contains(description, marker) {
+					kind = "alarm"
+					break
+				}
+			}
+		}
+	}
+	ui.mu.Unlock()
+
+	if sample {
+		if err := ui.store.record(ctx, topic, now, values); err != nil && ctx.Err() == nil {
+			ui.logger.Warn("Could not save telemetry", "group", topic, "error", err)
+		}
+	}
+	if state != "" {
+		ui.addEvent(ctx, now, kind, state)
+	}
+}
+
+// Run records controller notices and maintains local history.
+func (ui *UI) Run(ctx context.Context) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	var pruned time.Time
+	for ctx.Err() == nil {
+		now := time.Now()
+		if pruned.IsZero() || now.Sub(pruned) >= 24*time.Hour {
+			if err := ui.store.prune(ctx, now); err != nil && ctx.Err() == nil {
+				ui.logger.Warn("Could not prune old chart samples", "error", err)
+			} else {
+				pruned = now
+			}
+		}
+		ui.pollNotices(ctx, now)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (ui *UI) pollNotices(ctx context.Context, now time.Time) {
+	ui.mu.Lock()
+	last := ui.snapshots["operating_data"].At
+	lost := !last.IsZero() && now.Sub(last) > 20*time.Second && !ui.offline
+	if lost {
+		ui.offline = true
+	}
+	ui.mu.Unlock()
+	if lost {
+		ui.addEvent(ctx, now, "connection", "Connection to the controller was interrupted.")
+	}
+
+	reply, err := ui.controller.Get(ctx, nbe.GetInfoFunction, "*")
+	if err != nil {
+		return
+	}
+	info := strings.TrimSpace(reply.RawPayload)
+	if info == "0" {
+		info = ""
+	}
+	if info == ui.lastInfo {
+		return
+	}
+	ui.lastInfo = info
+	if info != "" {
+		ui.addEvent(ctx, now, "info", infoMessage(info))
+	}
+}
+
+func infoMessage(info string) string {
+	if id, err := strconv.Atoi(info); err == nil {
+		if id == 13 {
+			return "Hopper content is below the controller minimum."
+		}
+		return fmt.Sprintf("Controller information code %d", id)
+	}
+	return info
+}
+
+func (ui *UI) addEvent(ctx context.Context, at time.Time, kind, message string) {
+	if err := ui.store.addEvent(ctx, at, kind, message); err != nil && ctx.Err() == nil {
+		ui.logger.Warn("Could not save event", "kind", kind, "error", err)
+	}
+}
+
+func (ui *UI) Handler() http.Handler {
+	router := http.NewServeMux()
+	router.HandleFunc("GET /api/status", ui.getStatus)
+	router.HandleFunc("GET /api/history", ui.getHistory)
+	router.HandleFunc("GET /api/consumption", ui.getConsumption)
+	router.HandleFunc("GET /api/events", ui.getEvents)
+	router.HandleFunc("GET /api/notifications", ui.getNotices)
+	router.HandleFunc("POST /api/notifications/{id}/read", ui.markRead)
+	router.HandleFunc("GET /api/settings/{group}", ui.getSettings)
+	router.HandleFunc("PUT /api/settings/{group}/{key}", ui.putSetting)
+	router.HandleFunc("POST /api/power", ui.postPower)
+	router.HandleFunc("POST /api/alarm/reset", ui.resetAlarm)
+	files, err := fs.Sub(assets, "assets")
+	if err != nil {
+		panic(err)
+	}
+	router.Handle("GET /", http.FileServerFS(files))
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		if ui.locked {
+			username, password, _ := r.BasicAuth()
+			hash := sha256.Sum256([]byte(password))
+			if username != "boiler" || subtle.ConstantTimeCompare(hash[:], ui.password[:]) != 1 {
+				w.Header().Set("WWW-Authenticate", `Basic realm="Boiler Mate", charset="UTF-8"`)
+				http.Error(w, "Authentication required", http.StatusUnauthorized)
+				return
+			}
+		}
+		switch r.Method {
+		case http.MethodGet, http.MethodHead:
+		default:
+			// Browsers cannot set this header from another origin without a CORS preflight.
+			if r.Header.Get("X-Boiler-Mate") != "1" || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+				problem(w, http.StatusForbidden, "Request must originate in Boiler Mate.")
+				return
+			}
+		}
+		router.ServeHTTP(w, r)
+	})
+}
+
+func (ui *UI) getStatus(w http.ResponseWriter, _ *http.Request) {
+	ui.mu.RLock()
+	data := maps.Clone(ui.snapshots)
+	ui.mu.RUnlock()
+	status := data["operating_data"]
+	writeJSON(w, map[string]any{
+		"serial": ui.serial, "data": data,
+		"online":  !status.At.IsZero() && time.Since(status.At) < 20*time.Second,
+		"control": ui.write != nil, "lock": ui.locked,
+	})
+}
+
+func (ui *UI) getHistory(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	now := time.Now()
+	from := now.Add(-24 * time.Hour).Unix()
+	if raw := query.Get("from"); raw != "" {
+		start, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || start <= 0 || start > now.Unix() {
+			problem(w, http.StatusBadRequest, "Invalid history start time.")
+			return
+		}
+		from = start
+	}
+	to := now.Unix()
+	if raw := query.Get("to"); raw != "" {
+		end, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || end < from || end > to+60 {
+			problem(w, http.StatusBadRequest, "Invalid history end time.")
+			return
+		}
+		to = end
+	}
+	keys := query["series"]
+	if len(keys) == 0 || len(keys) > 8 {
+		problem(w, http.StatusBadRequest, "Select between one and eight signals.")
+		return
+	}
+	series := make(map[string][]point, len(keys))
+	for _, key := range keys {
+		if len(key) > 100 {
+			problem(w, http.StatusBadRequest, "Invalid signal identifier.")
+			return
+		}
+		points, err := ui.store.history(r.Context(), key, from, to)
+		if err != nil {
+			ui.serverError(w, "read history", err)
+			return
+		}
+		series[key] = points
+	}
+	writeJSON(w, series)
+}
+
+func (ui *UI) getEvents(w http.ResponseWriter, r *http.Request) {
+	ui.listEvents(w, r, false)
+}
+
+func (ui *UI) getNotices(w http.ResponseWriter, r *http.Request) {
+	ui.listEvents(w, r, true)
+}
+
+func (ui *UI) listEvents(w http.ResponseWriter, r *http.Request, notices bool) {
+	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
+	events, err := ui.store.events(r.Context(), before, notices)
+	if err != nil {
+		ui.serverError(w, "read events", err)
+		return
+	}
+	writeJSON(w, events)
+}
+
+func (ui *UI) markRead(w http.ResponseWriter, r *http.Request) {
+	if !ui.locked {
+		problem(w, http.StatusForbidden, "Enable web authentication to acknowledge messages.")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		problem(w, http.StatusBadRequest, "Invalid event identifier.")
+		return
+	}
+	result, err := ui.store.db.ExecContext(r.Context(), "UPDATE events SET seen = 1 WHERE id = ?", id)
+	if err != nil {
+		ui.serverError(w, "acknowledge event", err)
+		return
+	}
+	if count, err := result.RowsAffected(); err == nil && count == 0 {
+		problem(w, http.StatusNotFound, "Event not found.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (ui *UI) serverError(w http.ResponseWriter, action string, err error) {
+	ui.logger.Warn("Web request failed", "action", action, "error", err)
+	problem(w, http.StatusInternalServerError, "The local data could not be loaded.")
+}
+
+func writeJSON(w http.ResponseWriter, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(value)
+}
+
+func problem(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+func readJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		problem(w, http.StatusUnsupportedMediaType, "Expected a JSON request.")
+		return false
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil || !errors.Is(decoder.Decode(new(any)), io.EOF) {
+		problem(w, http.StatusBadRequest, "Invalid or incomplete request.")
+		return false
+	}
+	return true
+}

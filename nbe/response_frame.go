@@ -22,8 +22,6 @@ import (
 	"io"
 )
 
-// Use shared constants from frame_helpers.go
-
 type NBEResponse struct {
 	AppID        string // client application id
 	ControllerID string // controller id
@@ -31,10 +29,19 @@ type NBEResponse struct {
 	SeqNo        int8
 	Status       uint8
 	Payload      map[string]interface{}
+	RawPayload   string
 }
 
 func (frame *NBEResponse) Pack(writer io.Writer) error {
 	// Write header fields
+	if len(frame.AppID) > AppIDSize || len(frame.ControllerID) > ControllerIDSize ||
+		frame.Function < -1 || frame.Function > 99 || frame.SeqNo < -1 || frame.SeqNo > 99 || frame.Status > 9 {
+		return fmt.Errorf("invalid response header")
+	}
+	payloadStr := serializePayload(frame.Payload)
+	if len(payloadStr) > 999 {
+		return fmt.Errorf("response payload exceeds the NBE frame limit")
+	}
 	if err := writeString(writer, frame.AppID, AppIDSize, "AppID"); err != nil {
 		return err
 	}
@@ -61,7 +68,6 @@ func (frame *NBEResponse) Pack(writer io.Writer) error {
 	}
 
 	// Serialize and write payload
-	payloadStr := serializePayload(frame.Payload)
 	if err := writeASCIIInt(writer, len(payloadStr), PayloadLenSize, "payload length"); err != nil {
 		return err
 	}
@@ -80,10 +86,10 @@ func (frame *NBEResponse) Pack(writer io.Writer) error {
 func (frame *NBEResponse) Unpack(reader io.Reader) error {
 	// Read header fields
 	var err error
-	if frame.AppID, err = readStringFull(reader, AppIDSize, "AppID"); err != nil {
+	if frame.AppID, err = readString(reader, AppIDSize, "AppID"); err != nil {
 		return err
 	}
-	if frame.ControllerID, err = readStringFull(reader, ControllerIDSize, "ControllerID"); err != nil {
+	if frame.ControllerID, err = readString(reader, ControllerIDSize, "ControllerID"); err != nil {
 		return err
 	}
 
@@ -94,38 +100,42 @@ func (frame *NBEResponse) Unpack(reader io.Reader) error {
 
 	// Read function, sequence number, and status (ASCII encoded)
 	var functionInt int64
-	if functionInt, err = readASCIIInt64Full(reader, FunctionSize, "Function"); err != nil {
+	if functionInt, err = readASCIIInt64(reader, FunctionSize, "Function"); err != nil {
 		frame.Function = UnknownFunction
 	} else {
 		frame.Function = Function(functionInt)
 	}
 
 	var seqNoInt int64
-	if seqNoInt, err = readASCIIInt64Full(reader, SeqNoSize, "SeqNo"); err != nil {
+	if seqNoInt, err = readASCIIInt64(reader, SeqNoSize, "SeqNo"); err != nil {
 		frame.SeqNo = -1
 	} else {
 		frame.SeqNo = int8(seqNoInt)
 	}
 
 	var statusInt int64
-	if statusInt, err = readASCIIInt64Full(reader, StatusSize, "Status"); err != nil {
+	if statusInt, err = readASCIIInt64(reader, StatusSize, "Status"); err != nil {
 		return fmt.Errorf("invalid status: %w", err)
+	}
+	if statusInt < 0 || statusInt > 9 {
+		return fmt.Errorf("invalid response status")
 	}
 	frame.Status = uint8(statusInt)
 
 	// Read payload length and payload
 	var payloadLen int64
-	if payloadLen, err = readASCIIInt64Full(reader, PayloadLenSize, "payload length"); err != nil {
+	if payloadLen, err = readASCIIInt64(reader, PayloadLenSize, "payload length"); err != nil {
 		return fmt.Errorf("invalid payload length: %w", err)
 	}
 
-	payloadBytes, err := readBytesFull(reader, int(payloadLen), "payload")
+	payloadBytes, err := readBytes(reader, int(payloadLen), "payload")
 	if err != nil {
 		return err
 	}
 
 	// Parse payload
-	frame.Payload = parsePayload(string(payloadBytes), frame.Function)
+	frame.RawPayload = string(payloadBytes)
+	frame.Payload = parsePayload(frame.RawPayload, frame.Function)
 
 	// Validate end marker
 	if err := validateMarker(reader, EndMarker, "end marker"); err != nil {
@@ -134,5 +144,3 @@ func (frame *NBEResponse) Unpack(reader io.Reader) error {
 
 	return nil
 }
-
-// Helper functions are now in frame_helpers.go

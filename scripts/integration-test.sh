@@ -1,22 +1,10 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-echo "Starting integration test environment..."
+compose=(docker compose -f docker-compose.test.yml)
+if [[ -z "${TEST_MQTT_URL:-}" ]]; then
+    trap '"${compose[@]}" down' EXIT
+    "${compose[@]}" up -d --wait
+fi
 
-# Start Docker Compose services and wait for health checks
-docker compose -f docker-compose.test.yml up -d --wait
-
-echo "MQTT broker is ready!"
-
-# Run integration tests
-echo "Running integration tests..."
-INTEGRATION_TESTS=1 go test -v -timeout 30s ./test/integration
-
-# Capture test exit code
-TEST_EXIT_CODE=$?
-
-# Cleanup
-echo "Cleaning up test environment..."
-docker compose -f docker-compose.test.yml down
-
-exit $TEST_EXIT_CODE
+INTEGRATION_TESTS=1 go test -race -timeout 45s ./test/integration

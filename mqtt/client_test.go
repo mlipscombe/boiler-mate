@@ -18,196 +18,65 @@
 package mqtt
 
 import (
+	"crypto/tls"
 	"net/url"
 	"testing"
 )
 
-func TestCreateClientOptions(t *testing.T) {
-	tests := []struct {
-		name         string
-		uriString    string
-		expectBroker string
-		expectPort   string
-	}{
-		{
-			name:         "mqtt with default port",
-			uriString:    "mqtt://localhost",
-			expectBroker: "tcp://localhost:1883",
-			expectPort:   "1883",
-		},
-		{
-			name:         "mqtt with custom port",
-			uriString:    "mqtt://localhost:1234",
-			expectBroker: "tcp://localhost:1234",
-			expectPort:   "1234",
-		},
-		{
-			name:         "mqtts with default port",
-			uriString:    "mqtts://localhost",
-			expectBroker: "ssl://localhost:8883",
-			expectPort:   "8883",
-		},
-		{
-			name:         "mqtts with custom port",
-			uriString:    "mqtts://localhost:8884",
-			expectBroker: "ssl://localhost:8884",
-			expectPort:   "8884",
-		},
-		{
-			name:         "mqtt with username and password",
-			uriString:    "mqtt://user:pass@localhost",
-			expectBroker: "tcp://localhost:1883",
-			expectPort:   "1883",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			uri, err := url.Parse(tt.uriString)
-			if err != nil {
-				t.Fatalf("Failed to parse URI: %v", err)
-			}
-
-			client := &Client{
-				URI:           uri,
-				ClientID:      "test-client",
-				Prefix:        "test/prefix",
-				subscriptions: make(map[string]*subscriptionInfo),
-			}
-
-			opts, err := createClientOptions(client)
-
-			// Check that options were created
-			if err != nil || opts == nil {
-				t.Fatalf("Expected options to be created: %v", err)
-			}
-
-			if broker := opts.Servers[0].String(); broker != tt.expectBroker {
-				t.Errorf("broker = %q, want %q", broker, tt.expectBroker)
-			}
-		})
+func TestPrepareBroker(t *testing.T) {
+	for _, tc := range []struct{ uri, broker string }{
+		{"mqtt://localhost", "tcp://localhost:1883"},
+		{"tcp://[::1]:1234", "tcp://[::1]:1234"},
+		{"mqtts://user:secret@host", "ssl://host:8883"},
+	} {
+		uri, err := url.Parse(tc.uri)
+		if err != nil {
+			t.Fatal(err)
+		}
+		broker, err := PrepareBroker(uri)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := broker.options.Servers[0].String(); got != tc.broker {
+			t.Errorf("broker = %q, want %q", got, tc.broker)
+		}
+		if uri.Scheme == "mqtts" && (broker.options.TLSConfig.MinVersion != tls.VersionTLS12 || broker.options.Username != "user" || broker.options.Password != "secret") {
+			t.Error("TLS or broker credentials were not configured")
+		}
 	}
 }
 
-func TestCreateClientOptionsWithCredentials(t *testing.T) {
-	uri, _ := url.Parse("mqtt://testuser:testpass@localhost:1883")
-	client := &Client{
-		URI:           uri,
-		ClientID:      "test-client",
-		Prefix:        "test/prefix",
-		subscriptions: make(map[string]*subscriptionInfo),
-	}
-
-	opts, err := createClientOptions(client)
-
-	if err != nil || opts == nil {
-		t.Fatalf("Expected options to be created: %v", err)
-	}
-
-	// Options are created - actual connection test requires broker
-}
-
-func TestClientStructure(t *testing.T) {
-	uri, _ := url.Parse("mqtt://localhost:1883")
-
-	client := &Client{
-		URI:           uri,
-		ClientID:      "test-id",
-		Prefix:        "test/prefix",
-		subscriptions: make(map[string]*subscriptionInfo),
-	}
-
-	if client.URI.String() != "mqtt://localhost:1883" {
-		t.Errorf("Expected URI to be mqtt://localhost:1883, got %s", client.URI.String())
-	}
-
-	if client.ClientID != "test-id" {
-		t.Errorf("Expected ClientID to be test-id, got %s", client.ClientID)
-	}
-
-	if client.Prefix != "test/prefix" {
-		t.Errorf("Expected Prefix to be test/prefix, got %s", client.Prefix)
-	}
-
-	if client.subscriptions == nil {
-		t.Error("Expected subscriptions map to be initialized")
+func TestPrepareBrokerTLSOptions(t *testing.T) {
+	for _, raw := range []string{
+		"mqtts://localhost?tls_cert=missing",
+		"mqtts://localhost?tls_ca=missing",
+		"mqtts://localhost?tls_cacert=missing",
+	} {
+		uri, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := PrepareBroker(uri); err == nil {
+			t.Errorf("invalid TLS options were accepted for %s", uri.Redacted())
+		}
 	}
 }
 
-func TestSubscriptionTracking(t *testing.T) {
-	client := &Client{
-		subscriptions: make(map[string]*subscriptionInfo),
+func TestRetainedStateFormats(t *testing.T) {
+	client := &Client{prefix: "test/boiler", retained: make(map[string][]byte), changed: make(chan struct{}, 1)}
+	if err := client.PublishMany("device", map[string]any{"status": "online", "serial": int64(1234)}); err != nil {
+		t.Fatal(err)
 	}
-
-	// Test subscription storage
-	topic := "test/topic"
-	qos := byte(1)
-	callback := func(c *Client, m Message) {}
-
-	client.mu.Lock()
-	client.subscriptions[topic] = &subscriptionInfo{
-		qos:      qos,
-		callback: callback,
+	if got := string(client.retained["test/boiler/device/status"]); got != "online" {
+		t.Errorf("raw text = %q", got)
 	}
-	client.mu.Unlock()
-
-	// Verify storage
-	client.mu.Lock()
-	sub, exists := client.subscriptions[topic]
-	client.mu.Unlock()
-
-	if !exists {
-		t.Error("Expected subscription to be stored")
+	if got := string(client.retained["test/boiler/device/serial"]); got != "1234" {
+		t.Errorf("number = %q", got)
 	}
-
-	if sub.qos != qos {
-		t.Errorf("Expected QoS %d, got %d", qos, sub.qos)
+	if err := client.PublishMany("device", map[string]any{"status": "offline", "invalid": func() {}}); err == nil {
+		t.Fatal("accepted an invalid publication")
 	}
-
-	if sub.callback == nil {
-		t.Error("Expected callback to be stored")
-	}
-}
-
-func TestMessageHandlerType(t *testing.T) {
-	// Test that MessageHandler is a valid function type
-	callCount := 0
-	var handler MessageHandler = func(c *Client, m Message) {
-		callCount++
-	}
-
-	// Verify handler can be called
-	handler(nil, nil)
-
-	if callCount != 1 {
-		t.Errorf("Expected handler to be called once, got %d calls", callCount)
-	}
-}
-
-func TestClientTopicFormatting(t *testing.T) {
-	// Test client topic prefix formatting
-	uri, _ := url.Parse("mqtt://localhost:1883")
-
-	client := &Client{
-		URI:           uri,
-		ClientID:      "test-client",
-		Prefix:        "test/boiler",
-		subscriptions: make(map[string]*subscriptionInfo),
-	}
-
-	// Test prefix formatting for device status
-	expectedTopic := "test/boiler/device/status"
-	actualTopic := client.Prefix + "/device/status"
-
-	if actualTopic != expectedTopic {
-		t.Errorf("Expected topic %s, got %s", expectedTopic, actualTopic)
-	}
-
-	// Test prefix formatting for data topics
-	expectedDataTopic := "test/boiler/operating_data/boiler_temp"
-	actualDataTopic := client.Prefix + "/operating_data/boiler_temp"
-
-	if actualDataTopic != expectedDataTopic {
-		t.Errorf("Expected topic %s, got %s", expectedDataTopic, actualDataTopic)
+	if got := string(client.retained["test/boiler/device/status"]); got != "online" {
+		t.Errorf("a failed batch changed retained state to %q", got)
 	}
 }

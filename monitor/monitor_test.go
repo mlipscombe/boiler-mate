@@ -18,54 +18,40 @@
 package monitor
 
 import (
+	"log/slog"
 	"testing"
 
 	"github.com/mlipscombe/boiler-mate/nbe"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
-func TestIsNumeric(t *testing.T) {
-	tests := []struct {
-		name     string
-		value    interface{}
-		expected bool
-	}{
-		{"int64", int64(42), true},
-		{"float64", float64(3.14), true},
-		{"RoundedFloat", nbe.RoundedFloat(2.5), true},
-		{"string", "hello", false},
-		{"bool", true, false},
-		{"nil", nil, false},
+func TestOperatingState(t *testing.T) {
+	for _, tc := range []struct {
+		state         int64
+		text, enabled string
+	}{{14, "Off", "OFF"}, {5, "Power", "ON"}, {-1, "Unknown (-1)", "ON"}, {200, "Unknown (200)", "ON"}} {
+		values := map[string]any{"state": tc.state}
+		got := withOperatingState(values)
+		if got["state_text"] != tc.text || got["state_on"] != tc.enabled || len(values) != 1 {
+			t.Errorf("state %d produced %v", tc.state, got)
+		}
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := isNumeric(tt.value)
-			if result != tt.expected {
-				t.Errorf("isNumeric(%v) = %v, want %v", tt.value, result, tt.expected)
-			}
-		})
+	if !equalValue(nbe.RoundedFloat(12.001), nbe.RoundedFloat(12.004)) {
+		t.Error("equivalent MQTT values would be republished")
 	}
 }
 
-func TestUpdateGauge(t *testing.T) {
-	// Test that updateGauge doesn't panic with nil gauge
-	updateGauge(nil, "test-serial", int64(42))
-
-	// Test with RoundedFloat
-	updateGauge(nil, "test-serial", nbe.RoundedFloat(3.14))
-
-	// Test with string (should be ignored)
-	updateGauge(nil, "test-serial", "not a number")
-}
-
-func TestStartSettingsMonitor(t *testing.T) {
-	t.Skip("Skipping integration test - requires working network communication")
-}
-
-func TestStartOperatingDataMonitor(t *testing.T) {
-	t.Skip("Skipping integration test - requires working network communication")
-}
-
-func TestStartAdvancedDataMonitor(t *testing.T) {
-	t.Skip("Skipping integration test - requires working network communication")
+func TestOperatingMetricWinsOverAdvancedDuplicate(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	gauges := &metricSet{registry: registry, serial: "1234", gauges: make(map[string]metric)}
+	gauges.set(slog.Default(), "advanced_data", "power_kw", int64(1))
+	gauges.set(slog.Default(), "operating_data", "power_kw", nbe.RoundedFloat(2.5))
+	gauges.set(slog.Default(), "advanced_data", "power_kw", int64(3))
+	result, err := registry.Gather()
+	if err != nil || len(result) != 1 {
+		t.Fatalf("expected one registered metric, got %d, %v", len(result), err)
+	}
+	if result[0].GetName() != "boiler_mate_operating_data_power_kw" || result[0].Metric[0].Gauge.GetValue() != 2.5 {
+		t.Fatalf("unexpected metric %v", result[0])
+	}
 }

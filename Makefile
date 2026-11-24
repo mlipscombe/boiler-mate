@@ -30,7 +30,7 @@ DOCKER_FILE_PATH=Dockerfile
 
 .PHONY: pre-build docker-build post-build build release patch-release minor-release major-release tag check-status check-release showver \
 	push pre-push do-push post-push test test-verbose test-coverage test-race test-integration test-integration-up \
-	test-integration-down test-integration-logs test-all fmt vet lint check
+	test-integration-down test-integration-logs test-all fmt fmt-check vet lint check binary
 
 build: pre-build docker-build post-build
 
@@ -161,17 +161,17 @@ fmt:
 	@echo "Formatting code..."
 	go fmt ./...
 
+fmt-check:
+	@unformatted="$$(gofmt -l $$(git ls-files '*.go'))"; \
+	test -z "$$unformatted" || { printf '%s\n' "$$unformatted"; exit 1; }
+
 vet:
-	@echo "Running go vet..."
 	go vet ./...
 
 lint:
-	@echo "Running golint..."
-	@command -v golint >/dev/null 2>&1 || { echo "golint not installed, skipping..."; exit 0; }
-	golint ./...
+	golangci-lint run ./...
 
-# Combined check target for CI
-check: fmt vet test
+check: fmt-check vet test
 	@echo "All checks passed!"
 
 # Build binary
