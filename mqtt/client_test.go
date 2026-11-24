@@ -72,18 +72,19 @@ func TestCreateClientOptions(t *testing.T) {
 				URI:           uri,
 				ClientID:      "test-client",
 				Prefix:        "test/prefix",
-				subscriptions: make(map[string]subscriptionInfo),
+				subscriptions: make(map[string]*subscriptionInfo),
 			}
 
-			opts := createClientOptions(client)
+			opts, err := createClientOptions(client)
 
 			// Check that options were created
-			if opts == nil {
-				t.Fatal("Expected options to be created")
+			if err != nil || opts == nil {
+				t.Fatalf("Expected options to be created: %v", err)
 			}
 
-			// Test would verify broker URL, but that's private in paho
-			// So we just ensure no panic and options are created
+			if broker := opts.Servers[0].String(); broker != tt.expectBroker {
+				t.Errorf("broker = %q, want %q", broker, tt.expectBroker)
+			}
 		})
 	}
 }
@@ -94,13 +95,13 @@ func TestCreateClientOptionsWithCredentials(t *testing.T) {
 		URI:           uri,
 		ClientID:      "test-client",
 		Prefix:        "test/prefix",
-		subscriptions: make(map[string]subscriptionInfo),
+		subscriptions: make(map[string]*subscriptionInfo),
 	}
 
-	opts := createClientOptions(client)
+	opts, err := createClientOptions(client)
 
-	if opts == nil {
-		t.Fatal("Expected options to be created")
+	if err != nil || opts == nil {
+		t.Fatalf("Expected options to be created: %v", err)
 	}
 
 	// Options are created - actual connection test requires broker
@@ -113,7 +114,7 @@ func TestClientStructure(t *testing.T) {
 		URI:           uri,
 		ClientID:      "test-id",
 		Prefix:        "test/prefix",
-		subscriptions: make(map[string]subscriptionInfo),
+		subscriptions: make(map[string]*subscriptionInfo),
 	}
 
 	if client.URI.String() != "mqtt://localhost:1883" {
@@ -135,7 +136,7 @@ func TestClientStructure(t *testing.T) {
 
 func TestSubscriptionTracking(t *testing.T) {
 	client := &Client{
-		subscriptions: make(map[string]subscriptionInfo),
+		subscriptions: make(map[string]*subscriptionInfo),
 	}
 
 	// Test subscription storage
@@ -143,17 +144,17 @@ func TestSubscriptionTracking(t *testing.T) {
 	qos := byte(1)
 	callback := func(c *Client, m Message) {}
 
-	client.subMutex.Lock()
-	client.subscriptions[topic] = subscriptionInfo{
+	client.mu.Lock()
+	client.subscriptions[topic] = &subscriptionInfo{
 		qos:      qos,
 		callback: callback,
 	}
-	client.subMutex.Unlock()
+	client.mu.Unlock()
 
 	// Verify storage
-	client.subMutex.RLock()
+	client.mu.Lock()
 	sub, exists := client.subscriptions[topic]
-	client.subMutex.RUnlock()
+	client.mu.Unlock()
 
 	if !exists {
 		t.Error("Expected subscription to be stored")
@@ -191,7 +192,7 @@ func TestClientTopicFormatting(t *testing.T) {
 		URI:           uri,
 		ClientID:      "test-client",
 		Prefix:        "test/boiler",
-		subscriptions: make(map[string]subscriptionInfo),
+		subscriptions: make(map[string]*subscriptionInfo),
 	}
 
 	// Test prefix formatting for device status

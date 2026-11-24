@@ -208,3 +208,32 @@ func TestEntityConfigBuildUsesNativeStepForTemperature(t *testing.T) {
 		t.Errorf("Expected max=100 for percentage entity, got %v", config["max"])
 	}
 }
+
+func TestBoilerEntityDiscovery(t *testing.T) {
+	const serial, prefix = "TEST12345", "nbe/TEST12345"
+	configs := make(map[string]map[string]interface{})
+	for _, entity := range AllEntities() {
+		configs[entity.GetDiscoveryTopic(serial)] = entity.Build(serial, prefix, createDeviceBlock(serial))
+	}
+
+	power := configs["homeassistant/sensor/nbe_TEST12345/power_pct/config"]
+	if power["unit_of_measurement"] != "%" || power["stat_t"] != prefix+"/operating_data/power_pct" {
+		t.Errorf("unexpected power percentage config: %v", power)
+	}
+	if _, exists := power["device_class"]; exists {
+		t.Errorf("power percentage has an incompatible device class: %v", power["device_class"])
+	}
+
+	hopper := configs["homeassistant/number/nbe_TEST12345/hopper_content/config"]
+	for key, want := range map[string]interface{}{
+		"stat_t":              prefix + "/hopper/content",
+		"cmd_t":               prefix + "/set/hopper/content",
+		"unit_of_measurement": "kg",
+		"min":                 -30000,
+		"max":                 30000,
+	} {
+		if hopper[key] != want {
+			t.Errorf("hopper %s = %v, want %v", key, hopper[key], want)
+		}
+	}
+}

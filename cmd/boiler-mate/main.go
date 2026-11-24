@@ -18,12 +18,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
-	"time"
+	"syscall"
 
 	healthz "github.com/klyve/go-healthz"
 	"github.com/mlipscombe/boiler-mate/config"
@@ -96,13 +98,11 @@ func main() {
 		panic(err)
 	}
 
-	doneChan := make(chan error, 1)
 	log.Infof("Connected to boiler at %s (serial: %s)", uri.Host, boiler.Serial)
 
 	mqttUrl, err := url.Parse(cfg.MQTTURL)
 	if err != nil {
-		log.Fatalf("Invalid MQTT URL: %s", cfg.MQTTURL)
-		os.Exit(1)
+		log.Fatal("Invalid MQTT URL")
 	}
 
 	mqttPrefix := determineMQTTPrefix(mqttUrl, boiler.Serial)
@@ -113,9 +113,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Infof("Connected to MQTT broker %s (publishing on \"%s\")", mqttUrl.Host, mqttPrefix)
+	defer mqttClient.Close()
+	log.Infof("Configured MQTT broker %s (publishing on \"%s\")", mqttUrl.Host, mqttPrefix)
 
 	if err := mqttClient.Subscribe("set/+/+", 1, func(client *mqtt.Client, msg mqtt.Message) {
+		// Commands left on the broker must not be replayed after reconnecting.
+		if msg.Retained() {
+			log.Warnf("Ignoring retained boiler command on %s", msg.Topic())
+			return
+		}
 		key := parseSetTopic(msg.Topic())
 		value := msg.Payload()
 
@@ -134,7 +140,6 @@ func main() {
 
 	go func() {
 		if err := mqttClient.PublishMany("device", map[string]interface{}{
-			"status":     "online",
 			"serial":     boiler.Serial,
 			"ip_address": boiler.IPAddress,
 		}); err != nil {
@@ -171,14 +176,10 @@ func main() {
 			}()
 
 			homeassistant.PublishDiscovery(mqttClient, boiler.Serial, mqttPrefix, allReady)
-			time.Sleep(2 * time.Minute)
 		}()
 	}
 
-	err = <-doneChan
-
-	if err != nil {
-		log.Fatal(err)
-		os.Exit(1)
-	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	<-ctx.Done()
 }

@@ -141,11 +141,9 @@ func StartOperatingDataMonitor(boiler *nbe.NBE, mqttClient *mqtt.Client) chan bo
 						}
 					}
 				}
-				go func() {
-					if err := mqttClient.PublishMany("operating_data", changeSet); err != nil {
-						log.Debugf("Failed to publish operating_data: %v", err)
-					}
-				}()
+				if err := mqttClient.PublishMany("operating_data", changeSet); err != nil {
+					log.Debugf("Failed to publish operating_data: %v", err)
+				}
 
 				// Signal ready after first successful publish
 				if firstPublish {
@@ -196,11 +194,9 @@ func StartAdvancedDataMonitor(boiler *nbe.NBE, mqttClient *mqtt.Client) {
 						updateGauge(gauges[key], boiler.Serial, value)
 					}
 				}
-				go func() {
-					if err := mqttClient.PublishMany("advanced_data", changeSet); err != nil {
-						log.Debugf("Failed to publish advanced_data: %v", err)
-					}
-				}()
+				if err := mqttClient.PublishMany("advanced_data", changeSet); err != nil {
+					log.Debugf("Failed to publish advanced_data: %v", err)
+				}
 			})
 			if err != nil {
 				log.Debugf("Failed to get advanced data: %v", err)

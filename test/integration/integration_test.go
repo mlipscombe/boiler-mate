@@ -74,6 +74,7 @@ func TestIntegrationFullStack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create MQTT client: %v", err)
 	}
+	t.Cleanup(mqttClient.Close)
 
 	// Give MQTT time to connect
 	time.Sleep(1 * time.Second)
@@ -181,6 +182,7 @@ func TestIntegrationMQTTSubscription(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create MQTT client: %v", err)
 	}
+	t.Cleanup(mqttClient.Close)
 
 	// Give MQTT time to connect
 	time.Sleep(1 * time.Second)
