@@ -331,22 +331,23 @@ function withUnit(value,unit) {
   return display(value)+(value==null||!unit?'':' '+unit);
 }
 function renderCombustion(target) {
-  const reading = (name,key,emphasis=false)=>{
+  const reading = (name,key,className='combustion-reading')=>{
     const value = status.online ? signal('operating_data.'+key) : null;
-    return dom('div',{class:'combustion-reading'+(emphasis?' combustion-oxygen':'')},
+    return dom('div',{class:className},
       dom('span',{class:'metric-label'},name),
       dom('strong',{class:'combustion-value'},display(value),value!=null&&dom('small',{},unitSignal(key))));
   };
   const compensation = [['Low','corr_low'],['Medium','corr_medium'],['High','corr_high']];
   target.replaceChildren(
-    reading('Oxygen','oxygen',true),
+    dom('section',{class:'combustion-reading combustion-oxygen','aria-label':'Oxygen and compensation'},
+      reading('Oxygen','oxygen','combustion-current'),
+      dom('div',{class:'combustion-compensation'},dom('span',{class:'metric-label'},'O₂ compensation'),
+        dom('dl',{},compensation.map(([name,key])=>{
+          const value = status.online ? signal('operating_data.'+key) ?? signal('advanced_data.o2_'+key) : null;
+          return dom('div',{},dom('dt',{},name),dom('dd',{},withUnit(value,'%')));
+        })))),
     reading('Photo sensor','photo_level'),
-    reading('Chimney smoke','smoke_temp'),
-    dom('div',{class:'combustion-reading combustion-compensation'},dom('span',{class:'metric-label'},'O2 compensation'),
-      dom('dl',{},compensation.map(([name,key])=>{
-        const value = status.online ? signal('operating_data.'+key) ?? signal('advanced_data.o2_'+key) : null;
-        return dom('div',{},dom('dt',{},name),dom('dd',{},withUnit(value,'%')));
-      }))));
+    reading('Chimney smoke','smoke_temp'));
 }
 function overview(token) {
   const live = dom('div',{id:'overview-live'});
