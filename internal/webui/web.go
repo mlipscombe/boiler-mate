@@ -211,7 +211,8 @@ func (ui *UI) Handler() http.Handler {
 	router.HandleFunc("GET /api/status", ui.getStatus)
 	router.HandleFunc("GET /api/status/stream", ui.streamStatus)
 	router.HandleFunc("GET /api/history", ui.getHistory)
-	router.HandleFunc("GET /api/history/combustion", ui.getCombustionHistory)
+	router.HandleFunc("GET /api/history/combustion", ui.performanceHistoryHandler(true))
+	router.HandleFunc("GET /api/history/performance", ui.performanceHistoryHandler(false))
 	router.HandleFunc("GET /api/consumption", ui.getConsumption)
 	router.HandleFunc("GET /api/events", ui.getEvents)
 	router.HandleFunc("GET /api/notifications", ui.getNotices)
@@ -301,13 +302,19 @@ func (ui *UI) getHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, series)
 }
 
-func (ui *UI) getCombustionHistory(w http.ResponseWriter, r *http.Request) {
-	series, err := ui.store.combustionHistory(r.Context(), time.Now())
-	if err != nil {
-		ui.serverError(w, "read combustion history", err)
-		return
+func (ui *UI) performanceHistoryHandler(oxygenOnly bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		series, err := ui.store.performanceHistory(r.Context(), time.Now())
+		if err != nil {
+			ui.serverError(w, "read performance history", err)
+			return
+		}
+		if oxygenOnly {
+			delete(series, "operating_data.boiler_temp")
+			delete(series, "operating_data.boiler_ref")
+		}
+		writeJSON(w, series)
 	}
-	writeJSON(w, series)
 }
 
 func (ui *UI) getEvents(w http.ResponseWriter, r *http.Request) {

@@ -113,9 +113,6 @@
   .combustion-compensation dl > div { @apply px-2 first:pl-0 last:pr-0; }
   .combustion-compensation dt { @apply text-xs text-muted; }
   .combustion-compensation dd { @apply mt-0.5 text-base font-semibold whitespace-nowrap; }
-  .combustion-trend { @apply mt-3 min-w-0 border-t border-border pt-2.5; }
-  .combustion-trend h3 { @apply text-sm font-semibold; }
-  .combustion-trend .legend { @apply mt-0.5 mb-0; }
   .compact-readings { @apply mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4; }
   .compact-reading { @apply grid gap-1; }
   .compact-reading span { @apply text-xs text-muted; }
@@ -131,8 +128,7 @@
   .danger { @apply border-red-200 bg-red-50 text-red-800 hover:not-disabled:bg-red-100; }
 
   .chart { @apply block h-[clamp(11rem,26vw,20rem)] w-full; }
-  .chart.compact { @apply h-48; }
-  .chart.mini { @apply h-28; }
+  .chart.performance { @apply h-56 sm:h-60; }
   .chart-plot { @apply relative min-w-0; }
   .chart-cursor { @apply pointer-events-none absolute top-[14px] bottom-[29px] border-l border-muted; }
   .chart-tooltip { @apply pointer-events-none absolute top-1 left-0 z-10 max-w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs leading-snug text-ink shadow-sm; }

@@ -168,10 +168,12 @@ func (s *store) history(ctx context.Context, series string, from, to int64) ([]p
 	return points, rows.Err()
 }
 
-func (s *store) combustionHistory(ctx context.Context, now time.Time) (map[string][]point, error) {
+func (s *store) performanceHistory(ctx context.Context, now time.Time) (map[string][]point, error) {
 	// Use the minute samples so a shutdown cannot average a 0% target into a running period.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT time,
+			MAX(CASE WHEN series = 'operating_data.boiler_temp' THEN total / count END),
+			MAX(CASE WHEN series = 'operating_data.boiler_ref' THEN total / count END),
 			MAX(CASE WHEN series = 'operating_data.oxygen' THEN total / count END),
 			COALESCE(
 				MAX(CASE WHEN series = 'operating_data.oxygen_ref' THEN total / count END),
@@ -180,28 +182,38 @@ func (s *store) combustionHistory(ctx context.Context, now time.Time) (map[strin
 			MAX(CASE WHEN series = 'operating_data.state' THEN total / count END)
 		FROM samples
 		WHERE period = 60 AND time BETWEEN ? AND ?
-		  AND series IN ('operating_data.oxygen', 'operating_data.oxygen_ref', 'advanced_data.o2_setpoint', 'operating_data.state')
+		  AND series IN ('operating_data.boiler_temp', 'operating_data.boiler_ref',
+			'operating_data.oxygen', 'operating_data.oxygen_ref', 'advanced_data.o2_setpoint', 'operating_data.state')
 		GROUP BY time ORDER BY time
 	`, now.Add(-24*time.Hour).Unix(), now.Unix())
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	actual, target := []point{}, []point{}
+	temperature, temperatureTarget, oxygen, oxygenTarget := []point{}, []point{}, []point{}, []point{}
 	for rows.Next() {
 		var timestamp int64
-		var measured, wanted, state sql.NullFloat64
-		if err := rows.Scan(&timestamp, &measured, &wanted, &state); err != nil {
+		var boiler, boilerRef, measured, wanted, state sql.NullFloat64
+		if err := rows.Scan(&timestamp, &boiler, &boilerRef, &measured, &wanted, &state); err != nil {
 			return nil, err
 		}
+		if boiler.Valid {
+			temperature = append(temperature, point{Time: timestamp, Value: boiler.Float64})
+		}
+		if boilerRef.Valid {
+			temperatureTarget = append(temperatureTarget, point{Time: timestamp, Value: boilerRef.Float64})
+		}
 		if measured.Valid {
-			actual = append(actual, point{Time: timestamp, Value: measured.Float64})
+			oxygen = append(oxygen, point{Time: timestamp, Value: measured.Float64})
 		}
 		if wanted.Valid && wanted.Float64 > 0 && (!state.Valid || state.Float64 != nbe.PowerStateOff) {
-			target = append(target, point{Time: timestamp, Value: wanted.Float64})
+			oxygenTarget = append(oxygenTarget, point{Time: timestamp, Value: wanted.Float64})
 		}
 	}
-	return map[string][]point{"operating_data.oxygen": actual, "operating_data.oxygen_ref": target}, rows.Err()
+	return map[string][]point{
+		"operating_data.boiler_temp": temperature, "operating_data.boiler_ref": temperatureTarget,
+		"operating_data.oxygen": oxygen, "operating_data.oxygen_ref": oxygenTarget,
+	}, rows.Err()
 }
 
 func (s *store) prune(ctx context.Context, now time.Time) error {

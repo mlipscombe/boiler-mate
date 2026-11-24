@@ -360,18 +360,16 @@ function renderCombustion(target) {
 }
 function overview(token) {
   const live = dom('div',{id:'overview-live'});
-  const chartBody = dom('div',{},empty('Loading temperature history…'));
-  const oxygenHistory = dom('div',{},empty('Loading O₂ history…'));
+  const chartBody = dom('div',{},empty('Loading performance history…'));
   const recent = dom('div',{},empty('Loading recent events…'));
   const metricsPanel = dom('div',{},empty('Waiting for telemetry…'));
   const customise = dom('details',{},dom('summary',{},'Choose overview readings'),metricsPanel,
     btn('Reset to default',()=>setMetrics(null),'secondary mt-2'));
   main.replaceChildren(heading('Pellet boiler'),
     dom('div',{class:'stack'},live,
-      card('Combustion',null,dom('div',{class:'combustion-grid',id:'overview-combustion'}),
-        dom('div',{class:'combustion-trend'},dom('h3',{},'O₂ · 24 hours'),oxygenHistory)),
+      card('Combustion',null,dom('div',{class:'combustion-grid',id:'overview-combustion'})),
       dom('div',{class:'grid split'},
-        card('Temperature · 24 hours',null,chartBody,dom('a',{class:'home-link',href:'#charts'},'All charts')),
+        card('Performance','Last 24 hours',chartBody,dom('a',{class:'home-link',href:'#charts'},'All charts')),
         card('Recent events',null,recent,dom('a',{class:'home-link',href:'#events'},'View all events'))),
       card('Other readings',null,dom('div',{class:'compact-readings',id:'overview-custom'}),customise)));
   updateOverview();
@@ -383,25 +381,33 @@ function overview(token) {
   };
   const renderChooser = ()=>chooseSignals(metricsPanel,chosenMetrics,setMetrics,{exclude:combustionReadings});
   customise.addEventListener('toggle',()=>{if(customise.open)renderChooser();});
-  let historyRequest = 0;
-  const refreshCharts = async(showError=false)=>{
-    const request = ++historyRequest;
-    const draw=async(target,pending,options)=>{
-      try {
-        const data=await pending;
-        if(token===generation&&request===historyRequest)showChart(target,data,86400,options);
-      }catch(error){
-        if(showError&&token===generation&&request===historyRequest)target.replaceChildren(empty(error.message));
-      }
-    };
-    await Promise.all([
-      draw(chartBody,loadHistory(['operating_data.boiler_temp','operating_data.boiler_ref'],86400),{size:'compact'}),
-      draw(oxygenHistory,api('history/combustion'),{size:'mini',maxGap:60,
-        names:{'operating_data.oxygen':'Actual','operating_data.oxygen_ref':'Target'}}),
-    ]);
+  const performanceNames = {
+    'operating_data.boiler_temp':'Boiler temperature',
+    'operating_data.boiler_ref':'Temperature target',
+    'operating_data.oxygen':'Measured O₂',
+    'operating_data.oxygen_ref':'O₂ target',
   };
-  refreshPageHistory = refreshCharts;
-  refreshCharts(true);
+  const performanceColors = {
+    'operating_data.boiler_temp':colors[0],
+    'operating_data.boiler_ref':'#6b85c5',
+    'operating_data.oxygen':colors[1],
+    'operating_data.oxygen_ref':'#3f9b87',
+  };
+  let historyRequest = 0;
+  const refreshPerformance = async(showError=false)=>{
+    const request = ++historyRequest;
+    try {
+      const data=await api('history/performance');
+      if(token!==generation||request!==historyRequest)return;
+      const ordered=Object.fromEntries(Object.keys(performanceNames).map(key=>[key,data[key]??[]]));
+      showChart(chartBody,ordered,86400,{size:'performance',names:performanceNames,
+        seriesColors:performanceColors,axes:['°C','%'],maxGap:60});
+    }catch(error){
+      if(showError&&token===generation&&request===historyRequest)chartBody.replaceChildren(empty(error.message));
+    }
+  };
+  refreshPageHistory = refreshPerformance;
+  refreshPerformance(true);
   let recentRequest = 0;
   let recentLoaded = false;
   const refreshRecent = async()=>{
@@ -513,25 +519,27 @@ function chartBounds(series) {
   const margin = Math.max((maxY-minY)*.07, .1);
   return {minX,maxX:maxX===minX?minX+1:maxX,minY:minY-margin,maxY:maxY+margin};
 }
-function showChart(target,data,duration,{size='',names={},maxGap=Infinity}={}) {
+function showChart(target,data,duration,{size='',names={},seriesColors={},axes=[],maxGap=Infinity}={}) {
   const entries = Object.entries(data).filter(([,points])=>points.length);
   chartRenderers.delete(target);
   if(!entries.length){target.replaceChildren(empty('No readings in this period yet.'));return;}
   const previous=target.querySelector('canvas.chart');
   const focused=previous===document.activeElement;
   const label=key=>names[key]??titleSignal(key);
+  const color=(key,i)=>seriesColors[key]??colors[i];
   const units = new Set(entries.map(([key])=>unitSignal(key)));
-  const mixed = units.size>1;
-  const mini=size==='mini';
+  const axisUnits=axes.filter(unit=>units.has(unit));
+  const mixed=units.size>1&&!axisUnits.length;
+  const performance=size==='performance';
   const visual = dom('canvas',{class:size?'chart '+size:'chart',role:'img',tabindex:0,
-    'aria-label':(mini?'O₂ history, 24 hours. ':'Line chart. ')+entries.map(([key])=>label(key)).join(', ')+'. Use the arrow keys to inspect values.'});
+    'aria-label':(performance?'Performance, 24 hours. ':'Line chart. ')+entries.map(([key])=>label(key)).join(', ')+'. Use the arrow keys to inspect values.'});
   const cursor=dom('div',{class:'chart-cursor',hidden:true,'aria-hidden':'true'});
   const tooltip=dom('div',{class:'chart-tooltip',hidden:true,role:'status'});
   const plot=dom('div',{class:'chart-plot'},visual,cursor,tooltip);
   const samples=new Map();
   const swatch=(key,i)=>{
     const dot=dom('span',{class:key.endsWith('_ref')?'dot dashed':'dot','aria-hidden':'true'});
-    dot.style.color=colors[i];
+    dot.style.color=color(key,i);
     return dot;
   };
   entries.forEach(([key,points],i)=>{
@@ -542,7 +550,7 @@ function showChart(target,data,duration,{size='',names={},maxGap=Infinity}={}) {
   });
   const times=[...samples.keys()].sort((a,b)=>a-b);
   const legend = dom('div',{class:'legend'},entries.map(([key,points],i)=>{
-    const text=label(key)+(mini?'':' · '+withUnit(points.at(-1).value,unitSignal(key)));
+    const text=label(key)+(performance?'':' · '+withUnit(points.at(-1).value,unitSignal(key)));
     return dom('span',{},swatch(key,i),text);
   }));
   target.replaceChildren(plot,legend);
@@ -606,17 +614,30 @@ function showChart(target,data,duration,{size='',names={},maxGap=Infinity}={}) {
     const newest=Math.floor(Date.now()/1000);
     bounds.minX=Math.min(bounds.minX,newest-duration);
     bounds.maxX=Math.max(bounds.maxX,newest);
-    const step=chartStep((bounds.maxY-bounds.minY)/(mini?3:4));
+    const step=chartStep((bounds.maxY-bounds.minY)/4);
     bounds.minY=Math.floor(bounds.minY/step)*step;
     bounds.maxY=Math.ceil(bounds.maxY/step)*step;
-    const rows=mixed?4:Math.min(8,Math.round((bounds.maxY-bounds.minY)/step));
-    const x0=42, x1=width-16, y0=14, y1=height-29;
+    const scales=new Map(axisUnits.map(unit=>{
+      const range=chartBounds(entries.filter(([key])=>unitSignal(key)===unit).map(([,points])=>points));
+      const axisStep=chartStep((range.maxY-range.minY)/3);
+      const minY=Math.floor(range.minY/axisStep)*axisStep;
+      return [unit,{minY,maxY:minY+4*axisStep}];
+    }));
+    const rows=mixed||axisUnits.length?4:Math.min(8,Math.round((bounds.maxY-bounds.minY)/step));
+    const x0=axisUnits.length?48:42, x1=width-(axisUnits.length>1?44:16), y0=14, y1=height-29;
     view={x0,x1,bounds};
     ctx.font='11px system-ui';ctx.fillStyle='#556773';
     for(let i=0;i<=rows;i++){
       const y=y1-i*(y1-y0)/rows;
       ctx.strokeStyle='#dce3dd';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x0,y);ctx.lineTo(x1,y);ctx.stroke();
-      if(!mixed)ctx.fillText(numeric.format(bounds.minY+i*step)+(mini?'%':''),2,y+3);
+      if(axisUnits.length){
+        for(const [index,unit] of axisUnits.entries()){
+          const {minY,maxY}=scales.get(unit);
+          const tick=numeric.format(minY+(maxY-minY)*i/rows);
+          ctx.textAlign=index?'right':'left';
+          ctx.fillText(tick+(unit==='%'?'%':' '+unit),index?width-2:2,y+3);
+        }
+      }else if(!mixed)ctx.fillText(numeric.format(bounds.minY+i*step),2,y+3);
     }
     const formatTime = duration<=86400?shorttime:new Intl.DateTimeFormat(undefined,
       duration>=365*86400?{month:'short',year:'numeric'}:{month:'short',day:'numeric'});
@@ -630,8 +651,8 @@ function showChart(target,data,duration,{size='',names={},maxGap=Infinity}={}) {
       ctx.fillText(formatTime.format(new Date(tick*1000)),x,height-6);
     }
     for(const [i,[key,points]] of entries.entries()){
-      const own=mixed?chartBounds([points]):bounds;
-      ctx.strokeStyle=colors[i];ctx.fillStyle=colors[i];ctx.lineWidth=mini?1.6:2.2;
+      const own=scales.get(unitSignal(key))??(mixed?chartBounds([points]):bounds);
+      ctx.strokeStyle=color(key,i);ctx.fillStyle=color(key,i);ctx.lineWidth=2.2;
       ctx.setLineDash(key.endsWith('_ref')?[5,4]:[]);ctx.beginPath();
       const isolated=[];
       for(const [j,p] of points.entries()){

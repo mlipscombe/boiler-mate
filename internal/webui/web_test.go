@@ -143,7 +143,7 @@ func TestControllerAPIReadOnlyChecks(t *testing.T) {
 	}
 }
 
-func TestCombustionHistoryKeepsInactiveTargetGaps(t *testing.T) {
+func TestPerformanceHistoryAlignsReadingsAndKeepsInactiveTargetGaps(t *testing.T) {
 	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -156,10 +156,10 @@ func TestCombustionHistoryKeepsInactiveTargetGaps(t *testing.T) {
 		prefix string
 		values map[string]any
 	}{
-		{now.Add(-25 * time.Hour), "operating_data", map[string]any{"oxygen": int64(7), "oxygen_ref": int64(10)}},
-		{first, "operating_data", map[string]any{"oxygen": int64(8), "oxygen_ref": int64(10), "state": int64(5)}},
+		{now.Add(-25 * time.Hour), "operating_data", map[string]any{"boiler_temp": int64(57), "oxygen": int64(7), "oxygen_ref": int64(10)}},
+		{first, "operating_data", map[string]any{"boiler_temp": int64(64), "boiler_ref": int64(68), "oxygen": int64(8), "oxygen_ref": int64(10), "state": int64(5)}},
 		{first, "advanced_data", map[string]any{"o2_setpoint": int64(12)}},
-		{first.Add(time.Minute), "operating_data", map[string]any{"oxygen": int64(15), "oxygen_ref": int64(10), "state": int64(nbe.PowerStateOff)}},
+		{first.Add(time.Minute), "operating_data", map[string]any{"boiler_temp": int64(63), "boiler_ref": int64(68), "oxygen": int64(15), "oxygen_ref": int64(10), "state": int64(nbe.PowerStateOff)}},
 		{first.Add(2 * time.Minute), "operating_data", map[string]any{"oxygen": int64(17), "oxygen_ref": int64(0), "state": int64(5)}},
 		{first.Add(2 * time.Minute), "advanced_data", map[string]any{"o2_setpoint": int64(12)}},
 		{first.Add(3 * time.Minute), "operating_data", map[string]any{"oxygen": int64(9), "state": int64(5)}},
@@ -169,19 +169,34 @@ func TestCombustionHistoryKeepsInactiveTargetGaps(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	result := httptest.NewRecorder()
-	ui.Handler().ServeHTTP(result, httptest.NewRequest(http.MethodGet, "/api/history/combustion", nil))
-	var series map[string][]point
-	if err := json.Unmarshal(result.Body.Bytes(), &series); err != nil || result.Code != http.StatusOK {
-		t.Fatalf("combustion history status %d: %s, %v", result.Code, result.Body, err)
+	handler := ui.Handler()
+	read := func(path string) map[string][]point {
+		t.Helper()
+		result := httptest.NewRecorder()
+		handler.ServeHTTP(result, httptest.NewRequest(http.MethodGet, path, nil))
+		var series map[string][]point
+		if err := json.Unmarshal(result.Body.Bytes(), &series); err != nil || result.Code != http.StatusOK {
+			t.Fatalf("%s status %d: %s, %v", path, result.Code, result.Body, err)
+		}
+		return series
 	}
+	series := read("/api/history/performance")
+	temperature := []point{{first.Unix(), 64}, {first.Add(time.Minute).Unix(), 63}}
+	temperatureTarget := []point{{first.Unix(), 68}, {first.Add(time.Minute).Unix(), 68}}
 	actual := []point{
 		{first.Unix(), 8}, {first.Add(time.Minute).Unix(), 15},
 		{first.Add(2 * time.Minute).Unix(), 17}, {first.Add(3 * time.Minute).Unix(), 9},
 	}
 	target := []point{{first.Unix(), 10}, {first.Add(3 * time.Minute).Unix(), 12}}
-	if !slices.Equal(series["operating_data.oxygen"], actual) || !slices.Equal(series["operating_data.oxygen_ref"], target) {
-		t.Fatalf("unexpected combustion history: %v", series)
+	if !slices.Equal(series["operating_data.boiler_temp"], temperature) ||
+		!slices.Equal(series["operating_data.boiler_ref"], temperatureTarget) ||
+		!slices.Equal(series["operating_data.oxygen"], actual) ||
+		!slices.Equal(series["operating_data.oxygen_ref"], target) {
+		t.Fatalf("unexpected performance history: %v", series)
+	}
+	legacy := read("/api/history/combustion")
+	if len(legacy) != 2 || !slices.Equal(legacy["operating_data.oxygen"], actual) || !slices.Equal(legacy["operating_data.oxygen_ref"], target) {
+		t.Fatalf("unexpected combustion history: %v", legacy)
 	}
 }
 
