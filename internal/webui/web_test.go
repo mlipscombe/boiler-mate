@@ -152,7 +152,7 @@ func TestStatusStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("unexpected stream response: %s %v", response.Status, response.Header)
 	}
