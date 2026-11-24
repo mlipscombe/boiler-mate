@@ -17,6 +17,41 @@
 
 package nbe
 
+// SettingRange is the controller's metadata for a setup value.
+type SettingRange struct {
+	Min      float64 `json:"min"`
+	Max      float64 `json:"max"`
+	Default  float64 `json:"default"`
+	Decimals int     `json:"decimals"`
+}
+
+// ReadSettingRange reads one range from a GetSetupRangeFunction response.
+func ReadSettingRange(payload map[string]any, key string) *SettingRange {
+	record, ok := payload[key].(map[string]any)
+	if !ok {
+		return nil
+	}
+	minimum, hasMin := settingNumber(record["min"])
+	maximum, hasMax := settingNumber(record["max"])
+	defaultValue, _ := settingNumber(record["default"])
+	decimals, hasDecimals := record["decimals"].(int64)
+	if !hasMin || !hasMax || minimum > maximum || !hasDecimals || decimals < 0 || decimals > 6 {
+		return nil
+	}
+	return &SettingRange{Min: minimum, Max: maximum, Default: defaultValue, Decimals: int(decimals)}
+}
+
+func settingNumber(value any) (float64, bool) {
+	switch v := value.(type) {
+	case int64:
+		return float64(v), true
+	case RoundedFloat:
+		return float64(v), true
+	default:
+		return 0, false
+	}
+}
+
 type SettingDefinition struct {
 	Name     string       `json:"name"`
 	Group    string       `json:"group"`

@@ -20,12 +20,7 @@ var settingKey = regexp.MustCompile(`^[a-z0-9_]+$`)
 
 var weekdays = []string{"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
 
-type settingRange struct {
-	Min      float64 `json:"min"`
-	Max      float64 `json:"max"`
-	Default  float64 `json:"default"`
-	Decimals int     `json:"decimals"`
-}
+type settingRange = nbe.SettingRange
 
 type field struct {
 	Key     string          `json:"key"`
@@ -100,23 +95,8 @@ func (ui *UI) getSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, fields)
 }
 
-func readRange(payload map[string]any, key string) *settingRange {
-	record, ok := payload[key].(map[string]any)
-	if !ok {
-		return nil
-	}
-	minimum, hasMin := number(record["min"])
-	maximum, hasMax := number(record["max"])
-	defaultValue, _ := number(record["default"])
-	decimals, _ := record["decimals"].(int64)
-	if !hasMin || !hasMax || minimum > maximum || decimals < 0 || decimals > 6 {
-		return nil
-	}
-	return &settingRange{Min: minimum, Max: maximum, Default: defaultValue, Decimals: int(decimals)}
-}
-
 func settingBounds(group, key string, payload map[string]any) (*settingRange, bool) {
-	bounds := readRange(payload, key)
+	bounds := nbe.ReadSettingRange(payload, key)
 	// StokerCloud allows editing Trip 2 even when this firmware advertises a zero range.
 	if group == "hopper" && key == "trip2" && bounds != nil && *bounds == (settingRange{}) {
 		return &settingRange{Max: 30000}, true

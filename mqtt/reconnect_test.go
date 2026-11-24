@@ -28,6 +28,7 @@ func TestClientReplaysLatestStateAfterBrokerLoss(t *testing.T) {
 	const telemetry = "test/boiler/operating_data/power_pct"
 	const discovery = "homeassistant/sensor/test/power_pct/config"
 	const command = "test/boiler/set/device/power_switch"
+	const controllerStatus = "test/boiler/device/controller_status"
 	received := make(chan string, 1)
 	if err := client.Subscribe("set/+/+", 1, func(_ *Client, msg Message) {
 		received <- string(msg.Payload())
@@ -50,6 +51,7 @@ func TestClientReplaysLatestStateAfterBrokerLoss(t *testing.T) {
 	ackBrokerConnect(t, initial)
 	checkBrokerReplay(t, initial, map[string]string{
 		"test/boiler/device/status": "online",
+		controllerStatus:            "offline",
 		telemetry:                   "10",
 		discovery:                   `{"stat_t":"test/boiler/operating_data/power_pct"}`,
 	})
@@ -75,9 +77,13 @@ func TestClientReplaysLatestStateAfterBrokerLoss(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := client.PublishMany("device", map[string]any{"controller_status": "online"}); err != nil {
+		t.Fatal(err)
+	}
 	writeBrokerPacket(t, recovered, packets.NewControlPacket(packets.Connack))
 	checkBrokerReplay(t, recovered, map[string]string{
 		"test/boiler/device/status": "online",
+		controllerStatus:            "online",
 		telemetry:                   "30",
 		discovery:                   `{"stat_t":"test/boiler/operating_data/power_pct"}`,
 	})
@@ -157,6 +163,9 @@ func checkBrokerReplay(t *testing.T, conn net.Conn, expected map[string]string) 
 		value, exists := expected[pub.TopicName]
 		if !exists || string(pub.Payload) != value {
 			t.Fatalf("unexpected publish for %s: %q", pub.TopicName, pub.Payload)
+		}
+		if pub.TopicName == "test/boiler/device/status" && len(expected) > 1 {
+			t.Fatalf("bridge became available before retained replay finished: %v", expected)
 		}
 		delete(expected, pub.TopicName)
 		ack := packets.NewControlPacket(packets.Puback).(*packets.PubackPacket)

@@ -107,11 +107,15 @@ func Run(parent context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 	var ready func()
 	if cfg.HADiscovery {
-		ready = func() {
-			if err := homeassistant.PublishDiscovery(client, boiler.Serial, prefix); err != nil {
-				logger.Warn("Could not queue Home Assistant discovery", "error", err)
+		firstPoll := make(chan struct{})
+		ready = func() { close(firstPoll) }
+		workers.Go(func() {
+			select {
+			case <-ctx.Done():
+			case <-firstPoll:
+				publishDiscovery(ctx, logger, boiler, client, prefix)
 			}
-		}
+		})
 	}
 	workers.Go(func() {
 		monitor.Run(ctx, logger, boiler, client, registry, boiler.Serial, observe, ready)
@@ -121,6 +125,33 @@ func Run(parent context.Context, cfg config.Config, logger *slog.Logger) error {
 		return ctx.Err()
 	case err := <-httpErrors:
 		return err
+	}
+}
+
+func publishDiscovery(ctx context.Context, logger *slog.Logger, boiler *nbe.NBE, client *mqtt.Client, prefix string) {
+	for ctx.Err() == nil {
+		response, err := boiler.Get(ctx, nbe.GetSetupRangeFunction, "boiler.*")
+		if ctx.Err() != nil {
+			return
+		}
+		var ranges map[string]any
+		if err == nil {
+			ranges = response.Payload
+		} else {
+			logger.Debug("Could not read boiler ranges for Home Assistant", "error", err)
+		}
+		if err := homeassistant.PublishDiscovery(client, boiler.Serial, prefix, ranges); err != nil {
+			logger.Warn("Could not queue Home Assistant discovery", "error", err)
+		}
+		if err == nil {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(10 * time.Second):
+		}
 	}
 }
 

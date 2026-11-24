@@ -18,7 +18,10 @@
 package homeassistant
 
 import (
+	"reflect"
 	"testing"
+
+	"github.com/mlipscombe/boiler-mate/nbe"
 )
 
 func TestCreateDeviceBlock(t *testing.T) {
@@ -150,62 +153,64 @@ func TestPublishSwitchesCreatesCorrectTopics(t *testing.T) {
 	}
 }
 
-func TestEntityConfigBuildUsesNativeStepForTemperature(t *testing.T) {
-	serial := "TEST12345"
-	prefix := "nbe/TEST12345"
-	devBlock := createDeviceBlock(serial)
+type discoveryCapture map[string]map[string]any
 
-	// Test temperature entity
-	tempEntity := EntityConfig{
-		Key:          "boiler_setpoint",
-		Name:         "Wanted Temperature",
-		EntityType:   Number,
-		DeviceClass:  "temperature",
-		Unit:         "°C",
-		MinValue:     0,
-		MaxValue:     85,
-		Step:         "1",
-		StateTopic:   "boiler/temp",
-		CommandTopic: "set/boiler/temp",
-	}
+func (capture discoveryCapture) PublishJSON(topic string, value any) error {
+	capture[topic] = value.(map[string]any)
+	return nil
+}
 
-	config := tempEntity.Build(serial, prefix, devBlock)
+func TestTemperatureDiscoveryUsesControllerRanges(t *testing.T) {
+	const serial, prefix = "TEST12345", "custom/boiler"
+	ranges := map[string]any{
+		"temp":       map[string]any{"min": int64(45), "max": nbe.RoundedFloat(82.5), "decimals": int64(1)},
+		"diff_under": map[string]any{"min": int64(0), "max": int64(35), "decimals": int64(0)},
+		"diff_over":  map[string]any{"min": int64(5), "max": int64(25), "decimals": int64(2)},
+	}
+	configs := make(discoveryCapture)
+	if err := PublishDiscovery(configs, serial, prefix, ranges); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []struct {
+		entity, setting, class string
+		min, max, step         float64
+	}{
+		{"boiler_setpoint", "temp", "temperature", 45, 82.5, 0.1},
+		{"diff_under", "diff_under", "temperature_delta", 0, 35, 1},
+		{"diff_over", "diff_over", "temperature_delta", 5, 25, 0.01},
+	} {
+		config := configs["homeassistant/number/nbe_"+serial+"/"+want.entity+"/config"]
+		for key, expected := range map[string]any{
+			"unit_of_measurement": "°C",
+			"device_class":        want.class,
+			"min":                 want.min,
+			"max":                 want.max,
+			"step":                want.step,
+			"stat_t":              prefix + "/boiler/" + want.setting,
+			"cmd_t":               prefix + "/set/boiler/" + want.setting,
+		} {
+			if config[key] != expected {
+				t.Errorf("%s %s = %v, want %v", want.entity, key, config[key], expected)
+			}
+		}
+		for _, key := range []string{"native_unit_of_measurement", "native_min_value", "native_max_value", "native_step"} {
+			if _, exists := config[key]; exists {
+				t.Errorf("%s published unsupported %s", want.entity, key)
+			}
+		}
+	}
+}
 
-	// Should use native_step, native_min_value, native_max_value for temperature
-	if step, ok := config["native_step"]; !ok || step != "1" {
-		t.Errorf("Expected native_step='1' for temperature entity, got %v", config["native_step"])
+func TestDiscoveryWithoutTemperatureRanges(t *testing.T) {
+	configs := make(discoveryCapture)
+	if err := PublishDiscovery(configs, "1234", "custom/boiler", nil); err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := config["step"]; ok {
-		t.Error("Expected 'step' to not be set for temperature entity, but it was")
+	if _, ok := configs["homeassistant/number/nbe_1234/boiler_setpoint/config"]; ok {
+		t.Error("setpoint was discovered without controller bounds")
 	}
-
-	// Test percentage entity (no device_class)
-	percentEntity := EntityConfig{
-		Key:          "boiler_power_min",
-		Name:         "Minimum Power (%)",
-		EntityType:   Number,
-		Unit:         "%",
-		MinValue:     10,
-		MaxValue:     100,
-		Step:         "1",
-		StateTopic:   "regulation/boiler_power_min",
-		CommandTopic: "set/regulation/boiler_power_min",
-	}
-
-	config = percentEntity.Build(serial, prefix, devBlock)
-
-	// Should use regular step, min, max for non-native units
-	if step, ok := config["step"]; !ok || step != "1" {
-		t.Errorf("Expected step='1' for percentage entity, got %v", config["step"])
-	}
-	if _, ok := config["native_step"]; ok {
-		t.Error("Expected 'native_step' to not be set for percentage entity, but it was")
-	}
-	if minVal, ok := config["min"]; !ok || minVal != 10 {
-		t.Errorf("Expected min=10 for percentage entity, got %v", config["min"])
-	}
-	if maxVal, ok := config["max"]; !ok || maxVal != 100 {
-		t.Errorf("Expected max=100 for percentage entity, got %v", config["max"])
+	if _, ok := configs["homeassistant/switch/nbe_1234/power/config"]; !ok {
+		t.Error("missing ranges blocked power discovery")
 	}
 }
 
@@ -222,6 +227,26 @@ func TestBoilerEntityDiscovery(t *testing.T) {
 	}
 	if _, exists := power["device_class"]; exists {
 		t.Errorf("power percentage has an incompatible device class: %v", power["device_class"])
+	}
+
+	wantAvailability := []map[string]string{
+		{"topic": prefix + "/device/status"},
+		{"topic": prefix + "/device/controller_status"},
+	}
+	for _, topic := range []string{
+		"homeassistant/switch/nbe_TEST12345/power/config",
+		"homeassistant/sensor/nbe_TEST12345/status/config",
+		"homeassistant/number/nbe_TEST12345/hopper_content/config",
+		"homeassistant/button/nbe_TEST12345/start_calibrate/config",
+	} {
+		config := configs[topic]
+		if config["availability_mode"] != "all" || !reflect.DeepEqual(config["availability"], wantAvailability) || config["avty_t"] != nil {
+			t.Errorf("%s has unexpected availability: %v", topic, config)
+		}
+	}
+	ipAddress := configs["homeassistant/sensor/nbe_TEST12345/ip_address/config"]
+	if ipAddress["avty_t"] != prefix+"/device/status" || ipAddress["availability"] != nil {
+		t.Errorf("IP address has unexpected availability: %v", ipAddress)
 	}
 
 	hopper := configs["homeassistant/number/nbe_TEST12345/hopper_content/config"]

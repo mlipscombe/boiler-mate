@@ -73,15 +73,29 @@ func runPoll(ctx context.Context, logger *slog.Logger, boiler reader, mqtt publi
 	cache := make(map[string]any)
 	ticker := time.NewTicker(task.interval)
 	defer ticker.Stop()
+	operating := task.function == nbe.GetOperatingDataFunction
+	var controllerStatus string
+	publishStatus := func(status string) {
+		if !operating || status == controllerStatus {
+			return
+		}
+		if err := mqtt.PublishMany("device", map[string]any{"controller_status": status}); err != nil {
+			logger.Warn("Could not queue controller availability", "error", err)
+			return
+		}
+		controllerStatus = status
+	}
 	for ctx.Err() == nil {
 		response, err := boiler.Get(ctx, task.function, task.path)
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
-			if ctx.Err() == nil {
-				logger.Debug("Controller poll failed", "topic", task.topic, "error", err)
-			}
-		} else {
+			logger.Debug("Controller poll failed", "topic", task.topic, "error", err)
+			publishStatus("offline")
+		} else if len(response.Payload) > 0 {
 			values := response.Payload
-			if task.topic == "operating_data" {
+			if operating {
 				values = withOperatingState(values)
 			}
 			if observe != nil {
@@ -98,11 +112,14 @@ func runPoll(ctx context.Context, logger *slog.Logger, boiler reader, mqtt publi
 				logger.Warn("Could not queue MQTT update", "topic", task.topic, "error", err)
 			} else {
 				maps.Copy(cache, updates)
-				if task.topic == "operating_data" && len(values) > 0 && ready != nil {
+				publishStatus("online")
+				if operating && ready != nil {
 					ready()
 					ready = nil
 				}
 			}
+		} else {
+			publishStatus("offline")
 		}
 
 		select {
@@ -122,19 +139,30 @@ func equalValue(left, right any) bool {
 }
 
 func withOperatingState(values map[string]any) map[string]any {
-	state, ok := values["state"].(int64)
-	if !ok {
+	if len(values) == 0 {
 		return values
 	}
+	state, ok := values["state"].(int64)
 	values = maps.Clone(values)
+	values["state_on"] = "None"
+	if !ok {
+		if text, _ := values["state_text"].(string); text == "" {
+			values["state_text"] = "Unknown"
+		}
+		return values
+	}
 	message := fmt.Sprintf("Unknown (%d)", state)
-	if state >= 0 && state < int64(len(nbe.PowerStates)) {
+	if state >= 0 && state < int64(len(nbe.PowerStates)) && nbe.PowerStates[state] != "" {
 		message = nbe.PowerStates[state]
 	}
 	values["state_text"] = message
-	values["state_on"] = "ON"
-	if state == nbe.PowerStateOff {
+	// The local protocol reports a phase. Firing and automatic standby
+	// establish that the boiler is enabled, while alarms and transitions do not.
+	switch state {
+	case nbe.PowerStateOff:
 		values["state_on"] = "OFF"
+	case 1, 2, 3, 4, 5, 6, 7, 9, 10, 22, 23, 24, 25, 30:
+		values["state_on"] = "ON"
 	}
 	return values
 }

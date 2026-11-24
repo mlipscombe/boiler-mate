@@ -217,6 +217,16 @@ func (mb *MockBoiler) processRequest(request *NBERequest) *NBEResponse {
 		path := string(request.Payload)
 		response.Payload = mb.getData(path)
 
+	case GetSetupRangeFunction:
+		switch string(request.Payload) {
+		case "boiler.*":
+			response.Payload["temp"] = "40,85,65,1"
+			response.Payload["diff_under"] = "0,50,10,0"
+			response.Payload["diff_over"] = "10,20,12,0"
+		default:
+			response.Status = 1
+		}
+
 	case GetOperatingDataFunction:
 		mb.mu.RLock()
 		if data, ok := mb.data["operating"]; ok {

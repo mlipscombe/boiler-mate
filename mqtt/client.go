@@ -74,7 +74,7 @@ func (broker *Broker) Open(ctx context.Context, logger *slog.Logger, clientID, p
 		prefix:        prefix,
 		logger:        logger,
 		subscriptions: make(map[string]*subscriptionInfo),
-		retained:      make(map[string][]byte),
+		retained:      map[string][]byte{prefix + "/device/controller_status": []byte("offline")},
 		changed:       make(chan struct{}, 1),
 		cancel:        cancel,
 		done:          make(chan struct{}),
@@ -232,6 +232,10 @@ func (client *Client) serve(ctx context.Context, connection mqtt.Client, lost <-
 			subscribed[topic] = sub
 		}
 
+		if err := publishRetained(ctx, connection, retained, sent); err != nil {
+			return err
+		}
+
 		if !online {
 			token := connection.Publish(client.prefix+"/device/status", 1, true, "online")
 			if err := waitForToken(ctx, token, ackTimeout); err != nil {
@@ -241,9 +245,6 @@ func (client *Client) serve(ctx context.Context, connection mqtt.Client, lost <-
 			online = true
 		}
 
-		if err := publishRetained(ctx, connection, retained, sent); err != nil {
-			return err
-		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

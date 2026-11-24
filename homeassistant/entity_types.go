@@ -43,7 +43,7 @@ type EntityConfig struct {
 	Precision      int
 	MinValue       interface{}
 	MaxValue       interface{}
-	Step           string
+	Step           float64
 	Mode           string
 	PayloadPress   string
 }
@@ -53,8 +53,17 @@ func (e *EntityConfig) Build(serial, prefix string, devBlock map[string]interfac
 	config := map[string]interface{}{
 		"name":    e.Name,
 		"uniq_id": fmt.Sprintf("nbe_%s_%s", serial, e.Key),
-		"avty_t":  fmt.Sprintf("%s/device/status", prefix),
 		"dev":     devBlock,
+	}
+	bridgeStatus := prefix + "/device/status"
+	if e.StateTopic == "device/ip_address" || e.StateTopic == "device/serial" {
+		config["avty_t"] = bridgeStatus
+	} else {
+		config["availability"] = []map[string]string{
+			{"topic": bridgeStatus},
+			{"topic": prefix + "/device/controller_status"},
+		}
+		config["availability_mode"] = "all"
 	}
 
 	// Add optional fields only if they're set
@@ -68,14 +77,9 @@ func (e *EntityConfig) Build(serial, prefix string, devBlock map[string]interfac
 		config["ic"] = e.Icon
 	}
 	if e.Unit != "" {
-		if e.DeviceClass == "temperature" {
-			config["native_unit_of_measurement"] = e.Unit
-			config["suggested_unit_of_measurement"] = e.Unit
-		} else {
-			config["unit_of_measurement"] = e.Unit
-		}
+		config["unit_of_measurement"] = e.Unit
 	}
-	if e.Precision > 0 {
+	if e.EntityType == Sensor && e.Precision > 0 {
 		config["suggested_display_precision"] = e.Precision
 	}
 
@@ -105,26 +109,13 @@ func (e *EntityConfig) Build(serial, prefix string, devBlock map[string]interfac
 			config["mode"] = e.Mode
 		}
 		if e.MinValue != nil {
-			// Use native_min_value for temperature, otherwise min
-			if e.DeviceClass == "temperature" {
-				config["native_min_value"] = e.MinValue
-			} else {
-				config["min"] = e.MinValue
-			}
+			config["min"] = e.MinValue
 		}
 		if e.MaxValue != nil {
-			if e.DeviceClass == "temperature" {
-				config["native_max_value"] = e.MaxValue
-			} else {
-				config["max"] = e.MaxValue
-			}
+			config["max"] = e.MaxValue
 		}
-		if e.Step != "" {
-			if e.DeviceClass == "temperature" {
-				config["native_step"] = e.Step
-			} else {
-				config["step"] = e.Step
-			}
+		if e.Step > 0 {
+			config["step"] = e.Step
 		}
 	}
 

@@ -66,10 +66,14 @@ func verifyBridge(t *testing.T, enableWrites bool) {
 	checkToken(t, observer.Publish(prefix+"/set/device/power_switch", 1, true, "ON"))
 	readings := make(chan paho.Message, 256)
 	onMessage := func(_ paho.Client, msg paho.Message) { readings <- msg }
+	controllerStatus := prefix + "/device/controller_status"
+	setpointConfig := "homeassistant/number/nbe_" + serial + "/boiler_setpoint/config"
 	checkToken(t, observer.SubscribeMultiple(map[string]byte{
 		prefix + "/device/status":                                    1,
+		controllerStatus:                                             1,
 		prefix + "/operating_data/boiler_temp":                       1,
 		"homeassistant/sensor/nbe_" + serial + "/boiler_temp/config": 1,
+		setpointConfig:                                               1,
 	}, onMessage))
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -88,14 +92,19 @@ func verifyBridge(t *testing.T, enableWrites bool) {
 
 	expected := map[string]string{
 		prefix + "/device/status":                                    "online",
+		controllerStatus:                                             "online",
 		prefix + "/operating_data/boiler_temp":                       "62.50",
 		"homeassistant/sensor/nbe_" + serial + "/boiler_temp/config": prefix + "/operating_data/boiler_temp",
+		setpointConfig:                                               `"step":0.1`,
 	}
 	deadline := time.NewTimer(8 * time.Second)
 	defer deadline.Stop()
 	for len(expected) > 0 {
 		select {
 		case message := <-readings:
+			if message.Topic() == controllerStatus && string(message.Payload()) == "offline" {
+				continue
+			}
 			if want, ok := expected[message.Topic()]; ok {
 				if !strings.Contains(string(message.Payload()), want) {
 					t.Fatalf("%s = %q, wanted %q", message.Topic(), message.Payload(), want)
@@ -146,6 +155,17 @@ func verifyBridge(t *testing.T, enableWrites bool) {
 
 	if writes := device.WriteAttempts(); writes != 0 {
 		t.Fatalf("%d settings writes reached the simulator", writes)
+	}
+	if enableWrites {
+		device.Stop()
+		select {
+		case message := <-readings:
+			if message.Topic() != controllerStatus || string(message.Payload()) != "offline" {
+				t.Fatalf("unexpected availability after controller loss: %s: %q", message.Topic(), message.Payload())
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("controller loss did not publish offline status")
+		}
 	}
 	cancel()
 	select {

@@ -18,8 +18,12 @@
 package monitor
 
 import (
+	"context"
+	"errors"
 	"log/slog"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/mlipscombe/boiler-mate/nbe"
 	"github.com/prometheus/client_golang/prometheus"
@@ -29,15 +33,79 @@ func TestOperatingState(t *testing.T) {
 	for _, tc := range []struct {
 		state         int64
 		text, enabled string
-	}{{14, "Off", "OFF"}, {5, "Power", "ON"}, {-1, "Unknown (-1)", "ON"}, {200, "Unknown (200)", "ON"}} {
+	}{
+		{14, "Off", "OFF"},
+		{5, "Power", "ON"},
+		{9, "Stopped - temperature reached", "ON"},
+		{23, "Stopped by timer", "ON"},
+		{8, "Temperature error boiler", "None"},
+		{13, "Fault ignition", "None"},
+		{18, "Unknown (18)", "None"},
+		{-1, "Unknown (-1)", "None"},
+		{200, "Unknown (200)", "None"},
+	} {
 		values := map[string]any{"state": tc.state}
 		got := withOperatingState(values)
 		if got["state_text"] != tc.text || got["state_on"] != tc.enabled || len(values) != 1 {
 			t.Errorf("state %d produced %v", tc.state, got)
 		}
 	}
+	if got := withOperatingState(map[string]any{"boiler_temp": int64(60)}); got["state_on"] != "None" || got["state_text"] != "Unknown" {
+		t.Errorf("missing phase produced %v", got)
+	}
+	if got := withOperatingState(map[string]any{"state_text": "Controller fault"}); got["state_on"] != "None" || got["state_text"] != "Controller fault" {
+		t.Errorf("controller-provided phase text produced %v", got)
+	}
 	if !equalValue(nbe.RoundedFloat(12.001), nbe.RoundedFloat(12.004)) {
 		t.Error("equivalent MQTT values would be republished")
+	}
+}
+
+type pollReaderFunc func() (*nbe.NBEResponse, error)
+
+func (read pollReaderFunc) Get(context.Context, nbe.Function, string) (*nbe.NBEResponse, error) {
+	return read()
+}
+
+type pollPublisherFunc func(string, map[string]any) error
+
+func (publish pollPublisherFunc) PublishMany(topic string, values map[string]any) error {
+	return publish(topic, values)
+}
+
+func TestControllerAvailabilityFollowsOperatingPolls(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	attempt := 0
+	read := pollReaderFunc(func() (*nbe.NBEResponse, error) {
+		attempt++
+		switch attempt {
+		case 1, 4, 5:
+			return nil, errors.New("controller did not respond")
+		case 2:
+			return &nbe.NBEResponse{}, nil
+		case 3, 6:
+			return &nbe.NBEResponse{Payload: map[string]any{"state": int64(13)}}, nil
+		default:
+			t.Fatal("unexpected poll after recovery")
+			return nil, nil
+		}
+	})
+	var statuses []string
+	publish := pollPublisherFunc(func(topic string, values map[string]any) error {
+		if topic == "device" {
+			statuses = append(statuses, values["controller_status"].(string))
+			if attempt == 6 {
+				cancel()
+			}
+		}
+		return nil
+	})
+	task := poll{nbe.GetOperatingDataFunction, "*", "operating_data", time.Millisecond}
+	gauges := &metricSet{registry: prometheus.NewRegistry(), gauges: make(map[string]metric)}
+	runPoll(ctx, slog.Default(), read, publish, gauges, task, nil, nil)
+	if want := []string{"offline", "online", "offline", "online"}; !slices.Equal(statuses, want) {
+		t.Errorf("controller availability = %v, want %v", statuses, want)
 	}
 }
 

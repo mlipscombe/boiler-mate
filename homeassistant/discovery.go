@@ -20,17 +20,33 @@ package homeassistant
 import (
 	"errors"
 	"fmt"
+	"math"
+	"strings"
+
+	"github.com/mlipscombe/boiler-mate/nbe"
 )
 
 type discoveryPublisher interface {
 	PublishJSON(topic string, value any) error
 }
 
-// PublishDiscovery queues the retained discovery document for every entity.
-func PublishDiscovery(publisher discoveryPublisher, serial, prefix string) error {
+// PublishDiscovery queues retained discovery. Temperature controls require
+// an editable range from the controller.
+func PublishDiscovery(publisher discoveryPublisher, serial, prefix string, boilerRanges map[string]any) error {
 	device := createDeviceBlock(serial)
 	var errs []error
 	for _, entity := range AllEntities() {
+		if entity.EntityType == Number && entity.Unit == "°C" {
+			key := strings.TrimPrefix(entity.StateTopic, "boiler/")
+			bounds := nbe.ReadSettingRange(boilerRanges, key)
+			// MQTT Number accepts a step of at least 0.001.
+			if bounds == nil || bounds.Min >= bounds.Max || bounds.Decimals > 3 {
+				continue
+			}
+			entity.MinValue = bounds.Min
+			entity.MaxValue = bounds.Max
+			entity.Step = math.Pow10(-bounds.Decimals)
+		}
 		topic := entity.GetDiscoveryTopic(serial)
 		if err := publisher.PublishJSON(topic, entity.Build(serial, prefix, device)); err != nil {
 			errs = append(errs, fmt.Errorf("publish discovery for %s: %w", entity.Key, err))
