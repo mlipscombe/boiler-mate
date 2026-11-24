@@ -123,7 +123,7 @@
   .legend { @apply my-2 text-xs leading-5 text-muted; }
   .dot { @apply mr-1 inline-block h-[2px] w-4 bg-accent align-middle; }
   .switcher { @apply mb-3; }
-  .switcher button[aria-pressed="true"] { @apply border-blue-200 bg-accent-soft text-accent; }
+  .switcher a[aria-current="page"] { @apply border-blue-200 bg-accent-soft text-accent; }
   .toolbar { @apply mb-3; }
   .toolbar label { @apply flex min-w-32 items-center gap-2 text-sm text-muted; }
   .toolbar input, .toolbar select, .field-input, select.slot {

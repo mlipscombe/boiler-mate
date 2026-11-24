@@ -18,9 +18,20 @@ type readOnlyFixture struct{}
 func (readOnlyFixture) Get(_ context.Context, function nbe.Function, path string) (*nbe.NBEResponse, error) {
 	switch function {
 	case nbe.GetSetupFunction:
-		return &nbe.NBEResponse{Payload: map[string]any{"temp": int64(60)}}, nil
+		payload := map[string]any{"temp": int64(60)}
+		switch path {
+		case "alarm.*", "alarm.output":
+			payload = map[string]any{"output": int64(0)}
+		case "misc.expansion_module":
+			payload = map[string]any{"expansion_module": int64(0)}
+		}
+		return &nbe.NBEResponse{Payload: payload}, nil
 	case nbe.GetSetupRangeFunction:
-		return &nbe.NBEResponse{Payload: map[string]any{"temp": map[string]any{"min": int64(0), "max": int64(85), "default": int64(60), "decimals": int64(0)}}}, nil
+		key, maximum, defaultValue := "temp", int64(85), int64(60)
+		if strings.HasPrefix(path, "alarm.") {
+			key, maximum, defaultValue = "output", 20, 0
+		}
+		return &nbe.NBEResponse{Payload: map[string]any{key: map[string]any{"min": int64(0), "max": maximum, "default": defaultValue, "decimals": int64(0)}}}, nil
 	case nbe.GetConsumptionDataFunction:
 		return &nbe.NBEResponse{Payload: map[string]any{path: "0.0,1.2,2.3"}}, nil
 	default:
@@ -40,6 +51,7 @@ func TestControllerAPIReadOnlyChecks(t *testing.T) {
 	t.Cleanup(func() { _ = ui.Close() })
 	ui.Observe(t.Context(), "operating_data", map[string]any{"boiler_temp": nbe.RoundedFloat(42.5), "dhw_temp": nbe.RoundedFloat(999.9)})
 	ui.Observe(t.Context(), "misc", map[string]any{"xtea_key": "LOCAL_TEST_SECRET"})
+	ui.Observe(t.Context(), "pump", map[string]any{"output": int64(5)})
 	handler := ui.Handler()
 	for _, tc := range []struct {
 		method, path, body string
@@ -48,12 +60,15 @@ func TestControllerAPIReadOnlyChecks(t *testing.T) {
 	}{
 		{"GET", "/api/status", "", false, false, 200},
 		{"GET", "/api/settings/boiler", "", false, false, 200},
+		{"GET", "/api/settings/alarm", "", false, false, 200},
 		{"GET", "/api/consumption?period=days", "", false, false, 200},
 		{"PUT", "/api/settings/boiler/temp", `{"current":"60","value":"77"}`, false, false, 403},
 		{"PUT", "/api/settings/boiler/temp", `{"current":"60","value":"78"}`, true, true, 403},
 		{"PUT", "/api/settings/boiler/temp", `{"current":"59","value":"77"}`, false, true, 409},
 		{"PUT", "/api/settings/boiler/temp", `{"current":"60","value":"900"}`, false, true, 422},
 		{"PUT", "/api/settings/boiler/temp", `{"current":"60","value":"60"}`, false, true, 204},
+		{"PUT", "/api/settings/alarm/output", `{"current":"0","value":"4"}`, false, true, 422},
+		{"PUT", "/api/settings/alarm/output", `{"current":"0","value":"14"}`, false, true, 422},
 		{"POST", "/api/power", `{"action":"anything else"}`, false, true, 400},
 	} {
 		t.Run(tc.method+tc.path+tc.body, func(t *testing.T) {
@@ -81,6 +96,16 @@ func TestControllerAPIReadOnlyChecks(t *testing.T) {
 					t.Fatalf("missing setting metadata: %+v, %v", data, err)
 				}
 			}
+			if tc.path == "/api/settings/alarm" {
+				var data []field
+				if err := json.Unmarshal(result.Body.Bytes(), &data); err != nil || len(data) != 1 {
+					t.Fatalf("missing alarm settings: %+v, %v", data, err)
+				}
+				options := data[0].Options
+				if len(options) != 10 || options[1] != (settingOption{Value: "5", Label: "Output L5 (Output pump)"}) || options[9].Value != "13" {
+					t.Fatalf("incorrect alarm relay options: %+v", options)
+				}
+			}
 		})
 	}
 	from, to := time.Now().Add(-time.Hour).Unix(), time.Now().Unix()
@@ -91,6 +116,19 @@ func TestControllerAPIReadOnlyChecks(t *testing.T) {
 	points, err = ui.store.history(t.Context(), "operating_data.dhw_temp", from, to)
 	if err != nil || len(points) != 0 {
 		t.Fatalf("disconnected sensor was recorded: %v, %v", points, err)
+	}
+}
+
+func TestVendorOptionsRespectControllerRange(t *testing.T) {
+	oneBit := &settingRange{Max: 1}
+	if options := settingOptionKind("boiler.timer", oneBit).options(oneBit, false, nil); len(options) != 2 || options[0].Label != "Off" || options[1].Label != "On" {
+		t.Fatalf("incorrect Boolean options: %+v", options)
+	}
+	if options := settingOptionKind("hopper.distance_sensor", oneBit).options(oneBit, false, nil); len(options) != 3 || options[0].Disabled || options[1].Disabled || !options[2].Disabled {
+		t.Fatalf("incorrect distance sensor options: %+v", options)
+	}
+	if options := settingOptionKind("weather.input_reference", nil).options(nil, true, nil); len(options) != 21 || options[0].Label != "www" || options[20].Value != "20" {
+		t.Fatalf("incorrect expansion-board input options: %+v", options)
 	}
 }
 

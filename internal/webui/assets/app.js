@@ -2,7 +2,8 @@
 
 const navigation = [
   ['Monitor', [
-    ['overview', 'Overview', '◈'], ['charts', 'Charts', '∿'], ['consumption', 'Consumption', '▥'],
+    ['overview', 'Overview', '◈'], ['live-data', 'Live data', '◉'], ['advanced-data', 'Advanced data', '▦'],
+    ['charts', 'Charts', '∿'], ['consumption', 'Consumption', '▥'],
     ['events', 'Events', '☷'], ['messages', 'Messages', '▤'], ['notifications', 'Notifications', '◇'],
   ]],
   ['Controller', [
@@ -13,19 +14,24 @@ const navigation = [
 ];
 const groups = {
   boiler: ['Boiler', 'Temperature, heating schedule, and external thermostat.', [
-    ['boiler','Temperature & schedule'], ['regulation','Regulation'], ['oxygen','Oxygen'], ['cleaning','Cleaning'],
+    ['boiler','Temperature & schedule','temperature-and-schedule'], ['regulation','Regulation'], ['oxygen','Oxygen'], ['cleaning','Cleaning'],
     ['fan','Fan'], ['ignition','Ignition'], ['pump','Pump'], ['alarm','Alarm'],
   ]],
   fuel: ['Hopper & feed', 'Fuel level, pellet feed, and auger calibration.', [
     ['hopper','Hopper'], ['auger','Augers & external feed'], ['vacuum','Vacuum transport'],
   ]],
-  'hot-water': ['Hot water', 'Cylinder temperature, hot water output, and weekly schedule.', [['hot_water','Temperature & schedule']]],
+  'hot-water': ['Hot water', 'Cylinder temperature, hot water output, and weekly schedule.', [['hot_water','Temperature & schedule','temperature-and-schedule']]],
   weather: ['Weather', 'Outdoor readings and weather compensation for both heating circuits.', [
-    ['weather','Heating circuit 1'], ['weather2','Heating circuit 2'],
+    ['weather','Heating circuit 1','circuit-1'], ['weather2','Heating circuit 2','circuit-2'],
   ]],
-  solar: ['Solar', 'Solar collector, cylinder temperatures, and pump settings.', [['sun','Solar circuit']]],
-  system: ['System', 'Controller information, live diagnostics, and service settings.', [['misc','Controller'], ['manual','Service']]],
+  solar: ['Solar', 'Solar collector, cylinder temperatures, and pump settings.', [['sun','Solar circuit','solar-circuit']]],
+  system: ['System', 'Controller information and service settings.', [['misc','Controller','controller'], ['manual','Service','service']]],
 };
+const monitorPages = {
+  'live-data': ['Live data','Current operating readings from the pellet boiler.','operating_data'],
+  'advanced-data': ['Advanced data','Detailed readings for diagnosing controller and burner operation.','advanced_data'],
+};
+const consumptionPeriods = [['hours','Hourly'],['days','Daily'],['months','Monthly'],['years','Yearly']];
 const labels = {
   boiler_temp: ['Boiler temperature','°C'], boiler_ref: ['Boiler target','°C'],
   smoke_temp: ['Flue gas','°C'], return_temp: ['Return temperature','°C'],
@@ -128,7 +134,11 @@ function confirmChange(title,message,label) {
     dialog.addEventListener('close',()=>resolve(dialog.returnValue==='confirm'),{once:true});
   });
 }
-function renderNavigation() {
+function renderSections(pageID,sections,active,label) {
+  return dom('nav',{class:'switcher','aria-label':label},sections.map(([id,name,slug=id])=>
+    dom('a',{href:'#'+pageID+'/'+slug,class:'secondary','aria-current':id===active?'page':null},name)));
+}
+function renderNavigation(sectionLabel) {
   document.getElementById('navigation').replaceChildren(...navigation.map(([name,links]) =>
     dom('div',{class:'nav-group'},dom('div',{class:'nav-label'},name),
       links.map(([id,label])=>dom('a',{href:'#'+id,class:'side-link','aria-current':id===page?'page':null},label)))));
@@ -136,9 +146,9 @@ function renderNavigation() {
   mobile.replaceChildren(...navigation.map(([name,links]) =>
     dom('optgroup',{label:name},links.map(([id,label])=>dom('option',{value:id,selected:id===page},label)))));
   mobile.onchange = () => { window.location.hash = '#'+mobile.value; };
-  const label = navigation.flatMap(([,links])=>links).find(([id])=>id===page)?.[1];
-  document.getElementById('breadcrumb').textContent = label ?? 'Overview';
-  document.title = (label ?? 'Overview')+' · Boiler Mate';
+  const label = navigation.flatMap(([,links])=>links).find(([id])=>id===page)?.[1] ?? 'Overview';
+  document.getElementById('breadcrumb').textContent = [label,sectionLabel].filter(Boolean).join(' / ');
+  document.title = [sectionLabel,label,'Boiler Mate'].filter(Boolean).join(' · ');
 }
 function refreshChrome() {
   document.getElementById('sidebar-indicator').classList.toggle('live',Boolean(status.online));
@@ -153,6 +163,7 @@ async function refresh() {
   catch { status = {...status,online:false,control:false}; }
   refreshChrome();
   if (page === 'overview') updateOverview();
+  if (monitorPages[page]) updateReadings();
 }
 function metric(key, sub='') {
   return dom('article',{class:'card metric'},dom('p',{class:'metric-label'},titleSignal(key)),
@@ -382,28 +393,24 @@ function downloadCSV(data) {
   link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
-function consumption(token) {
+function consumption(period,token) {
   const output=dom('div',{},empty('Reading consumption from the controller…'));
-  let active='hours';let sequence=0;
-  const periods=[['hours','Hourly'],['days','Daily'],['months','Monthly'],['years','Yearly']];
-  const selector=dom('div',{class:'switcher','aria-label':'Consumption period'});
-  const load=async period=>{
-    active=period;const id=++sequence;
-    selector.replaceChildren(...periods.map(([key,label])=>btn(label,()=>load(key),'secondary',{'aria-pressed':key===active?'true':'false'})));
+  const selector=renderSections('consumption',consumptionPeriods,period,'Consumption period');
+  const load=async()=>{
     output.replaceChildren(empty('Reading consumption from the controller…'));
     try {
       const data=await api('consumption?period='+period);
-      if(token!==generation||id!==sequence)return;
+      if(token!==generation)return;
       const aggregate=data.total.reduce((sum,value)=>sum+value,0);
       const dhw=data.hotWater?.reduce((sum,value)=>sum+value,0);
       output.replaceChildren(dom('div',{class:'grid metrics'},
         stat('Period total',aggregate,'kg'),stat('Hot water',dhw,'kg'),stat('Controller counter',data.counter?.[0],'kg')),
         dom('div',{class:'table-scroll'},consumptionTable(data)));
-    } catch(error) {if(id===sequence)output.replaceChildren(empty(error.message),btn('Try again',()=>load(period)));}
+    } catch(error) {if(token===generation)output.replaceChildren(empty(error.message),btn('Try again',load));}
   };
   main.replaceChildren(heading('Consumption','Historical pellet use stored in the controller, including the domestic hot-water share when available.'),
     card('Pellet use',null,selector,output));
-  load(active);
+  load();
 }
 function stat(label,value,unit) {
   return dom('article',{class:'card metric'},dom('p',{class:'metric-label'},label),
@@ -495,20 +502,38 @@ async function checkDesktopNotices() {
     noticeReady=true;
   } catch {}
 }
-function dataTable(type) {
+function dataTable(type,query) {
   const data=snapshot(type);
   const entries=Object.entries(data).sort(([a],[b])=>textLabel(a).localeCompare(textLabel(b)));
   if(!entries.length)return empty('The controller has not returned these readings.');
+  const results=entries.filter(([key])=>[key,textLabel(key)].some(label=>label.toLowerCase().includes(query)));
+  if(!results.length)return empty('No readings match.');
   return dom('div',{class:'table-scroll'},dom('table',{},
     dom('thead',{},dom('tr',{},dom('th',{scope:'col'},'Signal'),dom('th',{scope:'col'},'Reading'))),
-    dom('tbody',{},entries.map(([key,value])=>dom('tr',{},
-      dom('th',{scope:'row'},textLabel(key)),dom('td',{},display(value)+' '+(labels[key]?.[1]??'')))))));
+    dom('tbody',{},results.map(([key,value])=>dom('tr',{},
+      dom('th',{scope:'row'},textLabel(key)),dom('td',{},[display(value),labels[key]?.[1]].filter(Boolean).join(' ')))))));
 }
-function settingsPage(id,token) {
+function updateReadings() {
+  const filter=document.getElementById('readings-filter');
+  if(!filter)return;
+  const type=monitorPages[page][2];
+  const timestamp=status.data[type]?.at;
+  document.getElementById('reading-time').textContent=timestamp?'Last sample '+shorttime.format(new Date(timestamp)):'';
+  document.getElementById('reading-table').replaceChildren(dataTable(type,filter.value.trim().toLowerCase()));
+}
+function readingsPage(id) {
+  const [title,description]=monitorPages[id];
+  const filter=dom('input',{id:'readings-filter',type:'search',class:'field-input lookup',
+    'aria-label':'Filter readings',placeholder:'Filter readings',oninput:updateReadings});
+  main.replaceChildren(heading(title,description),card('Readings',null,
+    dom('div',{class:'toolbar'},filter,dom('span',{id:'reading-time'})),dom('div',{id:'reading-table'})));
+  updateReadings();
+}
+function settingsPage(id,group,token) {
   const [title,description,tabs]=groups[id];
   const controls=dom('div',{},empty('Loading settings…'));
-  const tablist=dom('div',{class:'switcher','aria-label':title+' settings categories'});
-  let selected=tabs[0][0];let sequence=0;
+  const tablist=renderSections(id,tabs,group,title+' settings categories');
+  let sequence=0;
   const editEnabled=()=>status.control&&status.online;
   const metrics={
     boiler:['operating_data.boiler_temp','operating_data.return_temp','operating_data.power_kw','operating_data.smoke_temp'],
@@ -518,10 +543,8 @@ function settingsPage(id,token) {
     solar:['operating_data.sun_temp','operating_data.sun2_temp','operating_data.sun_dhw_temp','operating_data.sun_power_kw'],
     system:['advanced_data.program_version','operating_data.internet_uptime'],
   };
-  const load=async group=>{
-    selected=group;
+  const load=async()=>{
     const index=++sequence;
-    tablist.replaceChildren(...tabs.map(([key,name])=>btn(name,()=>load(key),'secondary',{'aria-pressed':key===selected?'true':'false'})));
     controls.replaceChildren(empty('Loading controller values…'));
     try {
       const fields=await api('settings/'+group);
@@ -531,20 +554,17 @@ function settingsPage(id,token) {
       const update=query=>{
         const match=query.trim().toLowerCase();
         const filtered=options.filter(field=>(field.label+' '+field.key).toLowerCase().includes(match));
-        inputs.replaceChildren(...(filtered.length?filtered.map(field=>settingRow(group,field,editEnabled,()=>load(group))):[empty('No settings match.')]));
+        inputs.replaceChildren(...(filtered.length?filtered.map(field=>settingRow(group,field,editEnabled,load)):[empty('No settings match.')]));
       };
       const search=dom('input',{type:'search',class:'field-input lookup','aria-label':'Filter settings',placeholder:'Filter settings',oninput:event=>update(event.target.value)});
       const timerFields=fields.filter(field=>field.timer);
       controls.replaceChildren(dom('div',{class:'toolbar'},search),inputs,
-        timerFields.length&&timerEditor(group,timerFields,editEnabled,()=>load(group)));
+        timerFields.length&&timerEditor(group,timerFields,editEnabled,load));
       update('');
     } catch(error) {
-      if(index===sequence)controls.replaceChildren(empty(error.message),btn('Try again',()=>load(group)));
+      if(token===generation&&index===sequence)controls.replaceChildren(empty(error.message),btn('Try again',load));
     }
   };
-  const diagnostics=id==='system' ? card('Live & advanced diagnostics','Includes regulation, combustion, and connected outputs.',
-    dom('details',{},dom('summary',{},'Operating data'),dataTable('operating_data')),
-    dom('details',{},dom('summary',{},'Advanced data'),dataTable('advanced_data'))) : null;
   const actions=dom('div',{class:'toolbar page-actions'},
     id==='system'&&btn('Reset alarm',async()=>{
       if(!await confirmChange('Reset controller alarm?','Resolve the cause of the alarm before resetting it.','Reset alarm'))return;
@@ -556,32 +576,36 @@ function settingsPage(id,token) {
   main.replaceChildren(heading(title,description,actions),
     dom('div',{class:'stack'},
       dom('div',{class:'grid metrics'},metrics[id].map(key=>metric(key))),
-      card('Controller settings',status.control?'Changes are sent to the controller after confirmation.':'You can view settings in read-only mode.',tablist,controls),
-      diagnostics));
-  load(selected);
+      card('Controller settings',status.control?'Changes are sent to the controller after confirmation.':'You can view settings in read-only mode.',tablist,controls)));
+  load();
 }
 
 function settingRow(group,field,canEdit,reload) {
   const range=field.range;
   const id='field-'+group+'-'+field.key;
   const key=group+'.'+field.key;
+  const options=field.options ?? [];
+  const currentValue=String(field.value);
+  const optionLabel=value=>options.find(option=>option.value===String(value))?.label ?? display(value);
   const help=field.help||range ? dom('details',{class:'field-help',name:'setting-help'},
     dom('summary',{'aria-label':'Info about '+field.label},'i'),
     dom('div',{class:'field-help-content'},
       field.help&&dom('p',{},field.help),
-      range&&dom('p',{},'Range '+display(range.min)+' to '+display(range.max)+' · Default '+display(range.default)),
+      range&&dom('p',{},options.length?'Default '+optionLabel(range.default):
+        'Range '+display(range.min)+' to '+display(range.max)+' · Default '+display(range.default)),
       dom('code',{class:'field-id'},key))) : null;
   const label=dom('div',{class:'field-label'},dom('label',{for:id,class:'field-name',title:key},field.label),help);
-  if(!range||!canEdit())return dom('div',{class:'field'},label,dom('span',{id,class:'field-value'},display(field.value)));
-  const isToggle=range.min===0&&range.max===1&&range.decimals===0;
-  const onChange=()=>{apply.disabled=String(field.value)===input.value||!input.checkValidity();};
-  const input=isToggle ? dom('select',{id,class:'field-input',onchange:onChange},
-    dom('option',{value:'0',selected:field.value===0},'0'),dom('option',{value:'1',selected:field.value===1},'1')):
+  if(!range||!canEdit())return dom('div',{class:'field'},label,dom('span',{id,class:'field-value'},optionLabel(field.value)));
+  const onChange=()=>{apply.disabled=currentValue===input.value||!input.checkValidity();};
+  const input=options.length ? dom('select',{id,class:'field-input',onchange:onChange},
+    !options.some(option=>option.value===currentValue)&&dom('option',{value:currentValue,selected:true,disabled:true},'Current value ('+display(field.value)+')'),
+    options.map(option=>dom('option',{value:option.value,selected:option.value===currentValue,disabled:option.disabled},option.label))):
     dom('input',{id,class:'field-input',type:'number',value:field.value,min:range.min,max:range.max,step:1/(10**range.decimals),oninput:onChange,required:true});
   const action=key==='auger.forced_run'?'Run auger':'Apply';
   const apply=btn(action,async()=>{
     const value=input.value;
-    if(!input.reportValidity()||!await confirmChange(action==='Run auger'?'Run external auger?':'Apply '+field.label+'?',display(field.value)+' → '+value,action))return;
+    const proposed=options.length?optionLabel(value):value;
+    if(!input.reportValidity()||!await confirmChange(action==='Run auger'?'Run external auger?':'Apply '+field.label+'?',optionLabel(field.value)+' → '+proposed,action))return;
     apply.disabled=true;
     try {await writeSetting(group,field.key,field.value,value);toast('Controller acknowledged the change.');reload();}
     catch(error){toast(error.message);onChange();}
@@ -604,7 +628,7 @@ function timerEditor(group,fields,canEdit,reload) {
     const slotName=showHour(hour*2)+'–'+showHour((hour+1)*2);
     rows.push(dom('tr',{},dom('th',{scope:'row'},slotName),days.map((day,index)=>{
       const maximum=byDay[day]?.range?.max;
-      const modes=group==='boiler'?['On','Mode 1','Mode 2']:['On','Off'];
+      const modes=group==='boiler'?['On','Off','Night reduction']:['On','Off'];
       if (!maximum||!canEdit())return dom('td',{},modes[Number(schedule[index][hour])]??'—');
       const select=dom('select',{class:'slot','aria-label':textLabel(day)+' '+slotName,
         onchange:event=>{schedule[index][hour]=event.target.value;apply.disabled=schedule.every((v,i)=>v.join('')===originals[i]);}},
@@ -655,19 +679,23 @@ let pageAbort=new AbortController();
 function renderPage() {
   pageAbort.abort();
   pageAbort=new AbortController();
-  const requested=window.location.hash.slice(1);
+  const [requested,requestedSection]=window.location.hash.slice(1).split('/');
   page=navigation.flatMap(([,items])=>items).some(([id])=>id===requested)?requested:'overview';
+  const sections=groups[page]?.[2] ?? (page==='consumption'?consumptionPeriods:[]);
+  const [section,sectionLabel]=sections.find(([id,,slug=id])=>slug===requestedSection) ?? sections[0] ?? [];
   const token=++generation;
-  renderNavigation();
-  if (groups[page]) settingsPage(page,token);
+  renderNavigation(requestedSection?sectionLabel:null);
+  if (groups[page]) settingsPage(page,section,token);
+  else if (monitorPages[page]) readingsPage(page);
   else if (page==='overview') overview(token);
   else if (page==='charts') charts(token);
-  else if (page==='consumption') consumption(token);
+  else if (page==='consumption') consumption(section,token);
   else if (page==='events'||page==='messages') activity(token,page==='messages');
   else if (page==='notifications') notifications(token);
   else helpPage();
 }
 
+document.querySelector('.skip').addEventListener('click',event=>{event.preventDefault();main.focus();});
 window.addEventListener('hashchange',()=>{if(window.location.hash!=='#content')renderPage();});
 refresh().then(renderPage);
 setInterval(refresh,5000);

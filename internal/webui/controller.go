@@ -28,12 +28,13 @@ type settingRange struct {
 }
 
 type field struct {
-	Key   string        `json:"key"`
-	Value any           `json:"value"`
-	Label string        `json:"label"`
-	Help  string        `json:"help,omitempty"`
-	Range *settingRange `json:"range,omitempty"`
-	Timer bool          `json:"timer,omitempty"`
+	Key     string          `json:"key"`
+	Value   any             `json:"value"`
+	Label   string          `json:"label"`
+	Help    string          `json:"help,omitempty"`
+	Range   *settingRange   `json:"range,omitempty"`
+	Options []settingOption `json:"options,omitempty"`
+	Timer   bool            `json:"timer,omitempty"`
 }
 
 type settingChange struct {
@@ -73,14 +74,18 @@ func (ui *UI) getSettings(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		ranges = &nbe.NBEResponse{}
 	}
+	expanded, roles := ui.settingHardware()
 	fields := []field{}
 	for key, value := range values {
 		if !settingKey.MatchString(key) || !visibleSetting(key) || group == "misc" && (key == "start" || key == "stop" || key == "reset_alarm") {
 			continue
 		}
 		label, help := settingDescription(group, key)
-		item := field{Key: key, Value: value, Label: label, Help: help,
-			Range: readRange(ranges.Payload, key), Timer: isTimer(group, key)}
+		bounds := readRange(ranges.Payload, key)
+		item := field{Key: key, Value: value, Label: label, Help: help, Range: bounds, Timer: isTimer(group, key)}
+		if !item.Timer {
+			item.Options = settingOptionKind(group+"."+key, bounds).options(bounds, expanded, roles)
+		}
 		fields = append(fields, item)
 	}
 	slices.SortFunc(fields, func(a, b field) int { return strings.Compare(a.Label, b.Label) })
@@ -162,14 +167,34 @@ func (ui *UI) putSetting(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusConflict, "The setting changed on the controller. Reload it before applying.")
 		return
 	}
-	bounds, err := ui.controller.Get(r.Context(), nbe.GetSetupRangeFunction, path)
-	if err != nil || !validSettingValue(change.Value, readRange(bounds.Payload, key), isTimer(group, key)) {
+	ranges, err := ui.controller.Get(r.Context(), nbe.GetSetupRangeFunction, path)
+	timer := isTimer(group, key)
+	var bounds *settingRange
+	if err == nil {
+		bounds = readRange(ranges.Payload, key)
+	}
+	if !validSettingValue(change.Value, bounds, timer) {
 		problem(w, http.StatusUnprocessableEntity, "The value is outside the controller's editable range.")
 		return
 	}
 	if sameSettingValue(change.Value, actual) {
 		w.WriteHeader(http.StatusNoContent)
 		return
+	}
+	if !timer {
+		kind := settingOptionKind(path, bounds)
+		expanded := false
+		if kind.usesExpansion() {
+			response, err := ui.controller.Get(r.Context(), nbe.GetSetupFunction, "misc.expansion_module")
+			expanded = err == nil && sameSettingValue("1", response.Payload["expansion_module"])
+		}
+		options := kind.options(bounds, expanded, nil)
+		if len(options) > 0 && !slices.ContainsFunc(options, func(option settingOption) bool {
+			return !option.Disabled && option.Value == change.Value
+		}) {
+			problem(w, http.StatusUnprocessableEntity, "Choose an option supported by this controller.")
+			return
+		}
 	}
 	ui.send(w, r, path, change.Value)
 }
