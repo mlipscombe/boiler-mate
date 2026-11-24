@@ -47,7 +47,7 @@ func Run(parent context.Context, cfg config.Config, logger *slog.Logger) error {
 		if pin, _ := cfg.Controller.User.Password(); pin != "" {
 			write = queue.write
 		}
-		ui, err = webui.New(ctx, logger, boiler, boiler.Serial, cfg.WebData, cfg.WebPassword, write)
+		ui, err = webui.New(ctx, logger, boiler, boiler.Serial, cfg.WebData, write)
 		if err != nil {
 			return err
 		}

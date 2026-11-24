@@ -41,7 +41,9 @@ Metrics and process probes are served at `/metrics`, `/healthz`, and `/liveness`
 ./boiler-mate --web-bind 127.0.0.1:8080 --web-data ./boiler-mate-data
 ```
 
-Open `http://127.0.0.1:8080`. The dashboard starts in read-only mode. To enable browser controls, set a controller password in the controller URI and a separate `BOILER_MATE_WEB_PASSWORD`. Sign in as `boiler`. Use HTTPS at your reverse proxy when serving the authenticated dashboard over a network. In a container, mount a persistent volume at `/data` owned by UID 10001 and set `BOILER_MATE_WEB_BIND=0.0.0.0:8080`.
+Open `http://127.0.0.1:8080`. The dashboard reads and writes settings when the controller URI contains its PIN. Omitting the PIN gives a read-only controller session.
+
+Boiler Mate delegates access control to its reverse proxy. Protect the entire dashboard, including `/api/`, behind [Authentik forward auth](https://docs.goauthentik.io/add-secure-apps/providers/proxy/forward_auth) or equivalent, and keep the web listener private to that proxy. In a container, mount a persistent volume at `/data` owned by UID 10001 and set `BOILER_MATE_WEB_BIND=0.0.0.0:8080` to enable the listener.
 
 The dashboard includes live telemetry, burner controls, controller settings and help, boiler and hot-water schedules, diagnostics, pellet consumption, signal charts with CSV export, events, and a local message inbox. Optional browser notifications appear while the dashboard is open. Settings and weekly schedules use the controller's reported ranges and clock. Chart history and events are recorded by this instance. The app reads historical pellet consumption directly from compatible controllers.
 

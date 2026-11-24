@@ -438,7 +438,7 @@ function activity(token,noticeMode) {
   let rows=[];
   function render() {
     const shown=rows.filter(row=>filter.value==='all'||(filter.value==='unread'?!row.read:row.kind===filter.value));
-    entries.replaceChildren(noticeList(shown,noticeMode&&status.lock));
+    entries.replaceChildren(noticeList(shown,noticeMode));
   }
   filter.addEventListener('change',render);
   const load=async older=>{
@@ -474,7 +474,7 @@ function notifications(token) {
   main.replaceChildren(heading('Notifications','Choose which controller notices can appear on this browser.'),
     dom('div',{class:'stack'},card('Desktop notifications','Boiler Mate can show notices while this dashboard is open.',inputs,desktop),
       card('Recent notifications',null,result,dom('a',{class:'home-link',href:'#messages'},'Open messages'))));
-  api('notifications').then(items=>{if(token===generation)result.replaceChildren(noticeList(items.slice(0,8),status.lock));})
+  api('notifications').then(items=>{if(token===generation)result.replaceChildren(noticeList(items.slice(0,8),true));})
     .catch(error=>result.replaceChildren(empty(error.message)));
 }
 async function checkDesktopNotices() {
@@ -622,7 +622,7 @@ function timerEditor(group,fields,canEdit,reload) {
 function helpPage() {
   const faqs=[
     ['Where do readings come from?','Boiler Mate reads one NBE controller directly over your local network. A controller can omit signals for optional hardware.'],
-    ['Why is the interface read only?','The bridge needs a controller password and a separate web password to enable controls. If readings become stale, controls pause until the controller responds.'],
+    ['Why is the interface read only?','A controller password enables writes. Controls pause when readings become stale and return when the controller responds.'],
     ['How are charts and consumption stored?','Charts are recorded by this instance and require a persistent data directory. Pellet consumption periods come from the controller itself.'],
     ['How do schedules work?','Boiler and hot-water schedules are stored in the controller and follow its clock. Change the relevant schedule enable setting after reviewing the weekly blocks.'],
     ['What do controller statuses mean?','Statuses describe the current operating stage or an alarm. Open Messages for controller information and Events for the local activity log. Address the cause at the boiler before resetting an alarm.'],

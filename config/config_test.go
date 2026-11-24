@@ -26,12 +26,11 @@ import (
 func TestLoadDefaultsAndOverrides(t *testing.T) {
 	t.Setenv("BOILER_MATE_MQTT", "mqtt://broker.local/test")
 	t.Setenv("BOILER_MATE_HOMEASSISTANT", "yes")
-	t.Setenv("BOILER_MATE_WEB_PASSWORD", "private")
 	cfg, err := Load([]string{"--controller", "udp://1234@boiler.local:8483", "--bind", "false", "--mqtt", "mqtts://another.local", "--homeassistant=false"}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Controller.Host != "boiler.local:8483" || cfg.MQTT.Host != "another.local" || cfg.HADiscovery || cfg.Bind != "false" || cfg.WebBind != "false" || cfg.WebPassword != "private" {
+	if cfg.Controller.Host != "boiler.local:8483" || cfg.MQTT.Host != "another.local" || cfg.HADiscovery || cfg.Bind != "false" || cfg.WebBind != "false" {
 		t.Fatal("flags and environment were not applied in the expected order")
 	}
 	cfg, err = Load(nil, io.Discard)
