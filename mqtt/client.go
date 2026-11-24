@@ -24,6 +24,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net"
 	"net/url"
@@ -32,7 +33,6 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -43,9 +43,8 @@ const (
 )
 
 type Client struct {
-	URI      *url.URL
-	ClientID string
-	Prefix   string
+	prefix string
+	logger *slog.Logger
 
 	mu            sync.Mutex
 	subscriptions map[string]*subscriptionInfo
@@ -63,26 +62,28 @@ type subscriptionInfo struct {
 type Message mqtt.Message
 type MessageHandler func(client *Client, message Message)
 
-// NewClient starts connecting in the background so polling can continue through a broker outage.
-func NewClient(uri *url.URL, clientID string, prefix string) (*Client, error) {
+// Broker holds validated connection options for the MQTT broker.
+type Broker struct {
+	options *mqtt.ClientOptions
+}
+
+// Open starts connecting in the background so polling can continue through a broker outage.
+func (broker *Broker) Open(ctx context.Context, logger *slog.Logger, clientID, prefix string) *Client {
+	ctx, cancel := context.WithCancel(ctx)
 	client := &Client{
-		URI:           uri,
-		ClientID:      clientID,
-		Prefix:        prefix,
+		prefix:        prefix,
+		logger:        logger,
 		subscriptions: make(map[string]*subscriptionInfo),
 		retained:      make(map[string][]byte),
 		changed:       make(chan struct{}, 1),
+		cancel:        cancel,
 		done:          make(chan struct{}),
 	}
-	opts, err := createClientOptions(client)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	client.cancel = cancel
-	go client.run(ctx, opts)
-	return client, nil
+	options := *broker.options
+	options.SetClientID(clientID)
+	options.SetWill(prefix+"/device/status", "offline", 1, true)
+	go client.run(ctx, options)
+	return client
 }
 
 func (client *Client) Close() {
@@ -90,41 +91,56 @@ func (client *Client) Close() {
 	<-client.done
 }
 
-func (client *Client) PublishMany(topic string, values map[string]interface{}) error {
-	for key, val := range values {
-		if err := client.PublishRaw(client.Prefix+"/"+topic+"/"+key, val); err != nil {
-			return err
+func (client *Client) PublishMany(topic string, values map[string]any) error {
+	if len(values) == 0 {
+		return nil
+	}
+	updates := make(map[string][]byte, len(values))
+	for key, value := range values {
+		name := client.prefix + "/" + topic + "/" + key
+		payload, err := rawPayload(value)
+		if err != nil {
+			return fmt.Errorf("marshal MQTT payload for %s: %w", name, err)
 		}
+		updates[name] = payload
 	}
+	client.mu.Lock()
+	maps.Copy(client.retained, updates)
+	client.mu.Unlock()
+	client.notifyChanged()
 	return nil
 }
 
-func (client *Client) PublishRaw(topic string, val interface{}) error {
-	switch payload := val.(type) {
+func rawPayload(value any) ([]byte, error) {
+	switch payload := value.(type) {
 	case string:
-		client.retain(topic, []byte(payload))
+		return []byte(payload), nil
 	case []byte:
-		client.retain(topic, bytes.Clone(payload))
+		return bytes.Clone(payload), nil
 	default:
-		return client.PublishJSON(topic, val)
+		return json.Marshal(value)
 	}
-	return nil
 }
 
-func (client *Client) PublishJSON(topic string, val interface{}) error {
-	payload, err := json.Marshal(val)
+func (client *Client) PublishRaw(topic string, value any) error {
+	payload, err := rawPayload(value)
+	return client.publish(topic, payload, err)
+}
+
+func (client *Client) PublishJSON(topic string, value any) error {
+	payload, err := json.Marshal(value)
+	return client.publish(topic, payload, err)
+}
+
+func (client *Client) publish(topic string, payload []byte, err error) error {
 	if err != nil {
 		return fmt.Errorf("marshal MQTT payload for %s: %w", topic, err)
 	}
-	client.retain(topic, payload)
-	return nil
-}
-
-func (client *Client) retain(topic string, payload []byte) {
 	client.mu.Lock()
 	client.retained[topic] = payload
 	client.mu.Unlock()
 	client.notifyChanged()
+	return nil
 }
 
 // Subscribe registers a subscription to install on this and subsequent connections.
@@ -133,7 +149,7 @@ func (client *Client) Subscribe(topic string, qos byte, callback MessageHandler)
 		return fmt.Errorf("invalid MQTT subscription for %q", topic)
 	}
 	client.mu.Lock()
-	client.subscriptions[client.Prefix+"/"+topic] = &subscriptionInfo{qos: qos, callback: callback}
+	client.subscriptions[client.prefix+"/"+topic] = &subscriptionInfo{qos: qos, callback: callback}
 	client.mu.Unlock()
 	client.notifyChanged()
 	return nil
@@ -146,7 +162,7 @@ func (client *Client) notifyChanged() {
 	}
 }
 
-func (client *Client) run(ctx context.Context, opts *mqtt.ClientOptions) {
+func (client *Client) run(ctx context.Context, opts mqtt.ClientOptions) {
 	defer close(client.done)
 
 	retryDelay := time.Second
@@ -155,9 +171,12 @@ func (client *Client) run(ctx context.Context, opts *mqtt.ClientOptions) {
 		// are replayed, never an old queue of in-flight publishes.
 		lost := make(chan error, 1)
 		opts.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
-			lost <- err
+			select {
+			case lost <- err:
+			default:
+			}
 		})
-		connection := mqtt.NewClient(opts)
+		connection := mqtt.NewClient(&opts)
 		err := waitForToken(ctx, connection.Connect(), 2*connectTimeout+time.Second)
 		if err == nil {
 			connectedAt := time.Now()
@@ -166,7 +185,7 @@ func (client *Client) run(ctx context.Context, opts *mqtt.ClientOptions) {
 				retryDelay = time.Second
 			}
 			if ctx.Err() != nil && connection.IsConnectionOpen() {
-				offline := connection.Publish(client.Prefix+"/device/status", 1, true, "offline")
+				offline := connection.Publish(client.prefix+"/device/status", 1, true, "offline")
 				offline.WaitTimeout(time.Second)
 			}
 			connection.Disconnect(250)
@@ -177,7 +196,7 @@ func (client *Client) run(ctx context.Context, opts *mqtt.ClientOptions) {
 			return
 		}
 
-		log.Warnf("MQTT session failed: %v; retrying in %s", err, retryDelay)
+		client.logger.Warn("MQTT session failed", "error", err, "retry_in", retryDelay)
 		select {
 		case <-ctx.Done():
 			return
@@ -214,11 +233,11 @@ func (client *Client) serve(ctx context.Context, connection mqtt.Client, lost <-
 		}
 
 		if !online {
-			token := connection.Publish(client.Prefix+"/device/status", 1, true, "online")
+			token := connection.Publish(client.prefix+"/device/status", 1, true, "online")
 			if err := waitForToken(ctx, token, ackTimeout); err != nil {
 				return fmt.Errorf("publish MQTT availability: %w", err)
 			}
-			log.Info("MQTT connected")
+			client.logger.Info("MQTT connected")
 			online = true
 		}
 
@@ -278,25 +297,34 @@ func waitForToken(ctx context.Context, token mqtt.Token, timeout time.Duration) 
 	}
 }
 
-func createClientOptions(client *Client) (*mqtt.ClientOptions, error) {
+// PrepareBroker validates the broker configuration without opening a connection.
+func PrepareBroker(uri *url.URL) (*Broker, error) {
 	opts := mqtt.NewClientOptions()
-	host := client.URI.Hostname()
+	if uri == nil {
+		return nil, fmt.Errorf("MQTT broker URL is required")
+	}
+	host := uri.Hostname()
 	if host == "" {
 		return nil, fmt.Errorf("MQTT broker hostname is required")
 	}
 
-	port := client.URI.Port()
-	switch client.URI.Scheme {
+	port := uri.Port()
+	switch uri.Scheme {
 	case "mqtts":
 		if port == "" {
 			port = "8883"
 		}
-		query := client.URI.Query()
+		query := uri.Query()
 		tlsCert := query.Get("tls_cert")
 		tlsKey := query.Get("tls_key")
 		caCert := query.Get("tls_cacert")
+		if caCert == "" {
+			caCert = query.Get("tls_ca")
+		}
 
 		tlsConfig := &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			// Retain the explicit legacy opt-out for privately managed brokers.
 			InsecureSkipVerify: query.Get("insecure") == "true",
 		}
 		if (tlsCert == "") != (tlsKey == "") {
@@ -305,14 +333,14 @@ func createClientOptions(client *Client) (*mqtt.ClientOptions, error) {
 		if tlsCert != "" {
 			cert, err := tls.LoadX509KeyPair(tlsCert, tlsKey)
 			if err != nil {
-				return nil, fmt.Errorf("load MQTT TLS certificate and key: %w", err)
+				return nil, fmt.Errorf("could not load the MQTT TLS certificate and key")
 			}
 			tlsConfig.Certificates = []tls.Certificate{cert}
 		}
 		if caCert != "" {
 			caCertData, err := os.ReadFile(caCert)
 			if err != nil {
-				return nil, fmt.Errorf("read MQTT CA certificate: %w", err)
+				return nil, fmt.Errorf("could not read the MQTT CA certificate")
 			}
 			tlsConfig.RootCAs = x509.NewCertPool()
 			if !tlsConfig.RootCAs.AppendCertsFromPEM(caCertData) {
@@ -328,13 +356,12 @@ func createClientOptions(client *Client) (*mqtt.ClientOptions, error) {
 		}
 		opts.AddBroker("tcp://" + net.JoinHostPort(host, port))
 	default:
-		return nil, fmt.Errorf("unsupported MQTT URL scheme %q", client.URI.Scheme)
+		return nil, fmt.Errorf("unsupported MQTT URL scheme %q", uri.Scheme)
 	}
 
-	opts.SetUsername(client.URI.User.Username())
-	password, _ := client.URI.User.Password()
+	opts.SetUsername(uri.User.Username())
+	password, _ := uri.User.Password()
 	opts.SetPassword(password)
-	opts.SetClientID(client.ClientID)
 	opts.SetCleanSession(true)
 	opts.SetAutoReconnect(false)
 	opts.SetConnectTimeout(connectTimeout)
@@ -342,6 +369,5 @@ func createClientOptions(client *Client) (*mqtt.ClientOptions, error) {
 	opts.SetWriteTimeout(ackTimeout)
 	opts.SetKeepAlive(15 * time.Second)
 	opts.SetPingTimeout(5 * time.Second)
-	opts.SetWill(client.Prefix+"/device/status", "offline", 1, true)
-	return opts, nil
+	return &Broker{options: opts}, nil
 }

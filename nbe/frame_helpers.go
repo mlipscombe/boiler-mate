@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -44,98 +45,50 @@ const (
 	EndMarker   byte = 0x04
 )
 
-// Binary read helpers using binary.Read (for requests)
-
 func readBytes(r io.Reader, n int, fieldName string) ([]byte, error) {
+	if n < 0 || n > 999 {
+		return nil, fmt.Errorf("invalid %s length", fieldName)
+	}
 	buf := make([]byte, n)
-	if err := binary.Read(r, binary.BigEndian, &buf); err != nil {
-		return nil, fmt.Errorf("failed to read %s: %w", fieldName, err)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return nil, fmt.Errorf("read %s: %w", fieldName, err)
 	}
 	return buf, nil
 }
 
 func readString(r io.Reader, n int, fieldName string) (string, error) {
 	buf, err := readBytes(r, n, fieldName)
-	if err != nil {
-		return "", err
-	}
-	return string(buf), nil
+	return string(buf), err
 }
-
-// Full read helpers using io.ReadFull (for responses)
-
-func readBytesFull(r io.Reader, n int, fieldName string) ([]byte, error) {
-	buf := make([]byte, n)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return nil, fmt.Errorf("failed to read %s: %w", fieldName, err)
-	}
-	return buf, nil
-}
-
-func readStringFull(r io.Reader, n int, fieldName string) (string, error) {
-	buf, err := readBytesFull(r, n, fieldName)
-	if err != nil {
-		return "", err
-	}
-	return string(buf), nil
-}
-
-// ASCII integer reading helpers
 
 func readASCIIInt(r io.Reader, n int, fieldName string) (int, error) {
-	buf, err := readBytes(r, n, fieldName)
-	if err != nil {
-		return 0, err
-	}
-	var value int
-	if _, err := fmt.Sscanf(string(buf), "%d", &value); err != nil {
-		return 0, fmt.Errorf("failed to parse %s as integer: %w", fieldName, err)
-	}
-	return value, nil
+	value, err := readASCIIInt64(r, n, fieldName)
+	return int(value), err
 }
 
 func readASCIIInt8(r io.Reader, n int, fieldName string) (int8, error) {
-	value, err := readASCIIInt(r, n, fieldName)
+	value, err := readASCIIInt64(r, n, fieldName)
 	return int8(value), err
 }
 
 func readASCIIInt16(r io.Reader, n int, fieldName string) (Function, error) {
-	value, err := readASCIIInt(r, n, fieldName)
+	value, err := readASCIIInt64(r, n, fieldName)
 	return Function(value), err
 }
 
 func readASCIIInt64(r io.Reader, n int, fieldName string) (int64, error) {
-	buf, err := readBytes(r, n, fieldName)
+	field, err := readString(r, n, fieldName)
 	if err != nil {
 		return 0, err
 	}
-	var value int64
-	if _, err := fmt.Sscanf(string(buf), "%d", &value); err != nil {
-		return 0, fmt.Errorf("failed to parse %s as int64: %w", fieldName, err)
+	value, err := strconv.ParseInt(strings.TrimSpace(field), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s field", fieldName)
 	}
 	return value, nil
 }
 
-func readASCIIInt64Full(r io.Reader, n int, fieldName string) (int64, error) {
-	buf, err := readBytesFull(r, n, fieldName)
-	if err != nil {
-		return 0, err
-	}
-	value, err := strconv.ParseInt(strings.TrimSpace(string(buf)), 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("failed to parse %s as integer: %w", fieldName, err)
-	}
-	return value, nil
-}
-
-// Marker validation helpers
-
-func readAndValidateMarker(r io.Reader, expected byte, fieldName string) error {
-	// Skip encryption byte first
-	if _, err := readBytes(r, 1, "encryption"); err != nil {
-		return err
-	}
-	// Read and validate marker
+func validateMarker(r io.Reader, expected byte, fieldName string) error {
 	marker, err := readBytes(r, 1, fieldName)
 	if err != nil {
 		return err
@@ -145,19 +98,6 @@ func readAndValidateMarker(r io.Reader, expected byte, fieldName string) error {
 	}
 	return nil
 }
-
-func validateMarker(r io.Reader, expected byte, fieldName string) error {
-	marker, err := readBytesFull(r, 1, fieldName)
-	if err != nil {
-		return err
-	}
-	if marker[0] != expected {
-		return fmt.Errorf("invalid %s: expected 0x%02x, got 0x%02x", fieldName, expected, marker[0])
-	}
-	return nil
-}
-
-// Binary write helpers
 
 func writeString(w io.Writer, s string, size int, fieldName string) error {
 	formatted := fmt.Sprintf("%*s", size, s)
@@ -244,12 +184,12 @@ func parsePayload(payloadStr string, function Function) map[string]interface{} {
 }
 
 func parseValue(value string) interface{} {
-	intVal, err := strconv.ParseInt(value, 10, 32)
+	intVal, err := strconv.ParseInt(value, 10, 64)
 	if err == nil {
 		return intVal
 	}
 	floatVal, err := strconv.ParseFloat(value, 32)
-	if err == nil {
+	if err == nil && !math.IsNaN(floatVal) && !math.IsInf(floatVal, 0) {
 		return RoundedFloat(floatVal)
 	}
 	return value

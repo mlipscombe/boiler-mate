@@ -18,28 +18,25 @@
 package homeassistant
 
 import (
+	"errors"
 	"fmt"
-
-	"github.com/mlipscombe/boiler-mate/mqtt"
-	log "github.com/sirupsen/logrus"
 )
 
-// PublishDiscovery sends Home Assistant MQTT discovery messages
-// Waits for data to be ready before publishing
-func PublishDiscovery(mqttClient *mqtt.Client, serial, prefix string, ready <-chan bool) {
-	log.Infof("Publishing Home Assistant discovery messages for %s", serial)
+type discoveryPublisher interface {
+	PublishJSON(topic string, value any) error
+}
 
-	// Wait for initial data to be ready
-	if ready != nil {
-		log.Debug("Waiting for initial data before publishing discovery messages...")
-		<-ready
-		log.Debug("Initial data ready, publishing discovery messages")
+// PublishDiscovery queues the retained discovery document for every entity.
+func PublishDiscovery(publisher discoveryPublisher, serial, prefix string) error {
+	device := createDeviceBlock(serial)
+	var errs []error
+	for _, entity := range AllEntities() {
+		topic := entity.GetDiscoveryTopic(serial)
+		if err := publisher.PublishJSON(topic, entity.Build(serial, prefix, device)); err != nil {
+			errs = append(errs, fmt.Errorf("publish discovery for %s: %w", entity.Key, err))
+		}
 	}
-
-	devBlock := createDeviceBlock(serial)
-
-	// Publish all entities
-	publishEntities(mqttClient, serial, prefix, devBlock)
+	return errors.Join(errs...)
 }
 
 func createDeviceBlock(serial string) map[string]interface{} {
@@ -50,21 +47,4 @@ func createDeviceBlock(serial string) map[string]interface{} {
 		"mf":   "NBE",
 		"sa":   "",
 	}
-}
-
-func publishEntities(mqttClient *mqtt.Client, serial, prefix string, devBlock map[string]interface{}) {
-	entities := AllEntities()
-
-	for _, entity := range entities {
-		config := entity.Build(serial, prefix, devBlock)
-		topic := entity.GetDiscoveryTopic(serial)
-
-		if err := mqttClient.PublishJSON(topic, config); err != nil {
-			log.Errorf("Error publishing discovery message for %s (%s): %v", entity.Name, entity.Key, err)
-		} else {
-			log.Debugf("Published discovery for %s at %s", entity.Name, topic)
-		}
-	}
-
-	log.Infof("Published %d entity discovery messages", len(entities))
 }

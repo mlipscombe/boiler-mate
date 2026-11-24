@@ -1,139 +1,70 @@
-# boiler-mate
+# Boiler Mate
 
-boiler-mate acts as a simple MQTT bridge from wood pellet boilers compatible with
-NBE V7/10/13 controllers, used by various manufacturers.
+Boiler Mate connects to a wood-pellet boiler with an NBE controller over the local network. It publishes controller readings to MQTT, supports Home Assistant discovery, and can serve a standalone dashboard for one boiler. The bridge and dashboard work without a StokerCloud account.
 
-## Supported Boilers
+## Supported controllers
 
-Any boiler with a controller that is managed through [https://stokercloud.dk]
-should be compatible as long as it has the correct firmware firmware installed.
+The project targets NBE V7, V10, and V13 controllers used in systems such as NBE Blackstar, NBE RTB, Kedel, and Opop. Available sensors, settings, and optional circuits depend on controller firmware and installed equipment.
 
-Possibly compatible manufacturers/models include:
+Some V7 and V10 installations require the App Operation firmware option to enable local access. See the [NBE controller resources](https://www.nbe.dk/program-download/).
 
-- NBE Blackstar
-- NBE RTB
-- Kedel
-- Opop
+## Run the bridge
 
-## Controller Firmware
+Build with Go 1.27.4 or use the published [container image](https://github.com/mlipscombe/boiler-mate/pkgs/container/boiler-mate).
 
-If your boiler has a V7 or V10 controller, you need the firmware version that
-removes the user interface on the touch screen, but enables access on the local
-network.
-
-To upgrade, go to [https://www.nbe.dk/program-download/] and select "Activate Controller
-for App Operation" and follow the steps.
-
-## How to Run
-
-Synopsis:
-
-```
-    Usage of boiler-mate:
-        --debug
-            debug mode
-        --bind string
-            address to bind for healthz and prometheus metrics endpoint, or "false"
-            to disable (default "0.0.0.0:2112")
-        --controller string
-            controller URI, in the format tcp://<serial>:<password>@<host>:<port>
-        --mqtt string
-            MQTT URI, in the format mqtt[s]://[<user>:<password>]@<host>:<port>[/<prefix>][?tls_cert=<cert_file>][&tls_key=<key_file>][&tls_ca=<ca_file>]
-            (default "mqtt://localhost:1883")
-```
-
-Example:
-
-```
-    # Run with basic options
-    boiler-mate --host udp://3629:0587451614@192.168.1.100:8483 --mqtt mqtt://10.10.11.20:1883
-
-    # Run with TLS
-    boiler-mate --host udp://3629:0587451614@192.168.1.100:8483 --mqtt mqtts://10.10.11.20:8883
-
-    # Run with mutual TLS
-    boiler-mate --host udp://3629:0587451614@192.168.1.100:8483 --mqtt mqtts://10.10.11.20:8883?tls_cert=client.crt&tls_key=client.key
-```
-
-Each command-line option can also be specified by an equivilent environment
-variable, prefixed with `BOILER_MATE_`. For example, to set the MQTT URI to
-`mqtt://mqtt:1833`, you can set the environment variable `BOILER_MATE_MQTT=mqtt://mqtt:1833`.
-
-The boiler's password is required to write settings, but not to read them. You can
-find controller's serial number and password in the top right corner of the display
-on the unit.
-
-If an MQTT prefix is not specified, messages will be published to the `nbe/<serial>`
-topic.
-
-## Development
-
-### Building from Source
-
-```bash
-# Build binary
+```sh
 go build -o boiler-mate ./cmd/boiler-mate
-
-# Or use Make
-make binary
+./boiler-mate \
+  --controller 'udp://1234@192.168.1.100:8483' \
+  --mqtt 'mqtt://broker.local:1883'
 ```
 
-### Running Tests
+Set controller and broker URLs through environment variables to keep passwords out of the command line. A controller password enables settings writes. Reads work with the serial alone. The historical `tcp://` controller URI spelling is accepted and uses UDP.
 
-```bash
-# Run unit tests (fast)
-go test ./...
-make test
+| Flag | Environment variable | Default |
+| --- | --- | --- |
+| `--controller` | `BOILER_MATE_CONTROLLER` | Configure for your controller |
+| `--mqtt` | `BOILER_MATE_MQTT` | `mqtt://localhost:1883` |
+| `--bind` | `BOILER_MATE_BIND` | `0.0.0.0:2112` |
+| `--homeassistant` | `BOILER_MATE_HOMEASSISTANT` | `true` |
+| `--log-level` | `BOILER_MATE_LOG_LEVEL` | `info` |
+| `--web-bind` | `BOILER_MATE_WEB_BIND` | `false` |
+| `--web-data` | `BOILER_MATE_WEB_DATA` | `boiler-mate-data` locally and `/data` in Docker |
 
-# Run integration tests (requires Docker)
+The MQTT prefix defaults to `nbe/<serial>`. Add a path to the broker URL to use a custom prefix. MQTT TLS uses `mqtts://` on port 8883 by default. Optional query parameters are `tls_ca` or `tls_cacert` for a private CA, and `tls_cert` plus `tls_key` for mutual TLS. The legacy `insecure=true` option explicitly disables certificate verification.
+
+Metrics and process probes are served at `/metrics`, `/healthz`, and `/liveness`. Set `--bind=false` to disable that listener.
+
+## Dashboard
+
+```sh
+./boiler-mate --web-bind 127.0.0.1:8080 --web-data ./boiler-mate-data
+```
+
+Open `http://127.0.0.1:8080`. The dashboard starts in read-only mode. To enable browser controls, set a controller password in the controller URI and a separate `BOILER_MATE_WEB_PASSWORD`. Sign in as `boiler`. Use HTTPS at your reverse proxy when serving the authenticated dashboard over a network. In a container, mount a persistent volume at `/data` owned by UID 10001 and set `BOILER_MATE_WEB_BIND=0.0.0.0:8080`.
+
+The dashboard includes live telemetry, burner controls, controller settings and help, boiler and hot-water schedules, diagnostics, pellet consumption, signal charts with CSV export, events, and a local message inbox. Optional browser notifications appear while the dashboard is open. Settings and weekly schedules use the controller's reported ranges and clock. Chart history and events are recorded by this instance. The app reads historical pellet consumption directly from compatible controllers.
+
+### Frontend development
+
+The binary embeds the precompiled Tailwind CSS and JavaScript. After editing the frontend, rebuild the stylesheet with Node.js 26 and commit the generated CSS alongside the source.
+
+```sh
+npm ci
+npm run build:css
+npm run check:js
+```
+
+## Testing
+
+```sh
+make fmt-check vet
+go test -race ./...
 make test-integration
-
-# Run all tests with coverage
-make test-coverage
-
-# Run tests with race detection
-make test-race
 ```
 
-### Project Structure
+The integration suite uses a read-only simulated boiler and Mosquitto. To use a dedicated test broker instead of Compose, set `TEST_MQTT_URL` and run `make test-integration`. The test exercises retained telemetry, discovery, metrics, and dashboard reads. The simulator rejects settings writes.
 
-```
-boiler-mate/
-├── cmd/boiler-mate/     # Main application
-├── config/              # Configuration management
-├── homeassistant/       # Home Assistant MQTT discovery
-├── monitor/             # Data monitoring and publishing
-├── mqtt/                # MQTT client wrapper
-├── nbe/                 # NBE protocol implementation
-└── test/integration/    # Integration tests
-```
+## License
 
-See [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) for detailed documentation.
-
-## CI/CD
-
-[![Build & Publish](https://github.com/mlipscombe/boiler-mate/workflows/Build%20%26%20Publish/badge.svg)](https://github.com/mlipscombe/boiler-mate/actions)
-
-The project uses GitHub Actions for continuous integration and deployment:
-
-- **All Tests** - Unit + integration tests with real MQTT broker (single run with race detection)
-- **Build Verification** - Ensures code compiles
-- **Linting** - Code quality checks with golangci-lint
-- **Docker Multi-Arch Builds** - Automatic builds for amd64 and arm64
-
-All tests run together in one job for faster feedback.
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests: `make test-all`
-5. Submit a pull request
-
-All PRs must pass CI/CD checks before merging.
-
-## Thanks & Acknowledgement
-
-Special thanks to [Anders Nylund](https://github.com/motoz) for documenting the
-NBE protocol.
+Boiler Mate is distributed under the GNU GPL v3. Thanks to [Anders Nylund](https://github.com/motoz) for documenting the NBE protocol.

@@ -18,85 +18,35 @@
 package nbe
 
 import (
+	"net/url"
 	"testing"
 )
 
-func TestMockBoilerCreation(t *testing.T) {
-	mb, err := NewMockBoiler("TEST12345")
+func TestMockBoilerReadOnlyRoundTrip(t *testing.T) {
+	mock, err := NewMockBoiler("SIM123")
 	if err != nil {
-		t.Fatalf("Failed to create mock boiler: %v", err)
+		t.Fatal(err)
 	}
-
-	if mb.Serial != "TEST12345" {
-		t.Errorf("Expected serial 'TEST12345', got '%s'", mb.Serial)
+	if err := mock.Start(); err != nil {
+		t.Fatal(err)
 	}
-
-	if mb.rsaKeyBase64 == "" {
-		t.Error("Expected RSA key to be generated")
-	}
-}
-
-func TestMockBoilerStartStop(t *testing.T) {
-	mb, err := NewMockBoiler("TEST12345")
+	t.Cleanup(mock.Stop)
+	client, err := Open(t.Context(), &url.URL{Scheme: "udp", Host: mock.GetAddr()})
 	if err != nil {
-		t.Fatalf("Failed to create mock boiler: %v", err)
+		t.Fatal(err)
 	}
-
-	err = mb.Start()
+	t.Cleanup(client.Close)
+	if client.Serial != "SIM123" {
+		t.Errorf("serial = %q", client.Serial)
+	}
+	reply, err := client.Get(t.Context(), GetOperatingDataFunction, "*")
 	if err != nil {
-		t.Fatalf("Failed to start mock boiler: %v", err)
+		t.Fatal(err)
 	}
-
-	if mb.Port == 0 {
-		t.Error("Expected port to be assigned")
+	if _, ok := reply.Payload["boiler_temp"]; !ok {
+		t.Error("boiler temperature was missing")
 	}
-
-	if !mb.running {
-		t.Error("Expected mock boiler to be running")
+	if mock.WriteAttempts() != 0 {
+		t.Fatal("the controller received a settings write")
 	}
-
-	mb.Stop()
-
-	if mb.running {
-		t.Error("Expected mock boiler to be stopped")
-	}
-}
-
-func TestMockBoilerDiscovery(t *testing.T) {
-	t.Skip("Skipping integration test - requires working network communication")
-}
-
-func TestMockBoilerGetOperatingData(t *testing.T) {
-	t.Skip("Skipping integration test - requires working network communication")
-}
-
-func TestMockBoilerGetSetupData(t *testing.T) {
-	t.Skip("Skipping integration test - requires working network communication")
-}
-
-func TestMockBoilerSetValue(t *testing.T) {
-	mb, err := NewMockBoiler("TEST12345")
-	if err != nil {
-		t.Fatalf("Failed to create mock boiler: %v", err)
-	}
-
-	testValue := RoundedFloat(99.9)
-	mb.SetValue("boiler", "temp", testValue)
-
-	retrievedValue, ok := mb.GetValue("boiler", "temp")
-	if !ok {
-		t.Fatal("Failed to retrieve set value")
-	}
-
-	if retrievedValue != testValue {
-		t.Errorf("Expected value %v, got %v", testValue, retrievedValue)
-	}
-}
-
-func TestMockBoilerAsyncRequests(t *testing.T) {
-	t.Skip("Skipping integration test - requires working network communication")
-}
-
-func TestMockBoilerMultipleClients(t *testing.T) {
-	t.Skip("Skipping integration test - requires working network communication")
 }

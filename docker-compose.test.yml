@@ -1,15 +1,12 @@
 services:
   mosquitto:
-    image: eclipse-mosquitto:2
-    container_name: boiler-mate-test-mqtt
+    image: eclipse-mosquitto:2.1.4-alpine@sha256:fa12172a051310efe5bcb7a6a11b77bd5faacb82cbacd7742aa758bf024fd8e4
     ports:
-      - "1883:1883"
-      - "9001:9001"
+      - "127.0.0.1:1883:1883"
     volumes:
       - ./test/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
     healthcheck:
-      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck", "-W", "3"]
-      interval: 5s
+      test: ["CMD", "mosquitto_pub", "-h", "127.0.0.1", "-t", "boiler-mate/test-health", "-q", "1", "-m", "ready"]
+      interval: 2s
       timeout: 3s
-      retries: 3
-      start_period: 5s
+      retries: 10

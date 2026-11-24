@@ -28,15 +28,17 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // MockBoiler simulates an NBE boiler for testing
 type MockBoiler struct {
+	writeAttempts atomic.Int64
 	Serial        string
 	Port          int
 	listener      net.PacketConn
-	running       bool              // Protected by mu
-	mu            sync.RWMutex      // Protects running and data
+	running       bool         // Protected by mu
+	mu            sync.RWMutex // Protects running and data
 	data          map[string]map[string]interface{}
 	rsaPrivateKey *rsa.PrivateKey
 	rsaPublicKey  *rsa.PublicKey
@@ -79,7 +81,7 @@ func (mb *MockBoiler) Start() error {
 	}
 	mb.listener = listener
 	mb.Port = listener.LocalAddr().(*net.UDPAddr).Port
-	
+
 	mb.mu.Lock()
 	mb.running = true
 	mb.mu.Unlock()
@@ -94,7 +96,7 @@ func (mb *MockBoiler) Stop() {
 	defer mb.mu.Unlock()
 	mb.running = false
 	if mb.listener != nil {
-		mb.listener.Close()
+		_ = mb.listener.Close()
 	}
 }
 
@@ -108,11 +110,11 @@ func (mb *MockBoiler) listen() {
 		mb.mu.RLock()
 		running := mb.running
 		mb.mu.RUnlock()
-		
+
 		if !running {
 			return
 		}
-		
+
 		buffer := make([]byte, 1024)
 		n, addr, err := mb.listener.ReadFrom(buffer)
 		if err != nil {
@@ -230,13 +232,9 @@ func (mb *MockBoiler) processRequest(request *NBERequest) *NBEResponse {
 		mb.mu.RUnlock()
 
 	case SetSetupFunction:
-		// Parse key=value from payload
-		payload := string(request.Payload)
-		parts := strings.SplitN(payload, "=", 2)
-		if len(parts) == 2 {
-			mb.setData(parts[0], parts[1])
-			response.Payload["status"] = "ok"
-		}
+		mb.writeAttempts.Add(1)
+		response.Status = 1
+		response.Payload["error"] = "settings writes are disabled in the simulator"
 
 	default:
 		response.Payload["error"] = "unsupported function"
@@ -281,19 +279,9 @@ func (mb *MockBoiler) getData(path string) map[string]interface{} {
 	return result
 }
 
-func (mb *MockBoiler) setData(path, value string) {
-	mb.mu.Lock()
-	defer mb.mu.Unlock()
-
-	parts := strings.SplitN(path, ".", 2)
-	if len(parts) == 2 {
-		category := parts[0]
-		key := parts[1]
-		if _, ok := mb.data[category]; !ok {
-			mb.data[category] = make(map[string]interface{})
-		}
-		mb.data[category][key] = value
-	}
+// WriteAttempts reports how many write requests reached the read-only test controller.
+func (mb *MockBoiler) WriteAttempts() int64 {
+	return mb.writeAttempts.Load()
 }
 
 // SetValue allows tests to set mock data
