@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -203,6 +204,54 @@ func TestVendorOptionsRespectControllerRange(t *testing.T) {
 	}
 	if options := settingOptionKind("weather.input_reference", nil).options(nil, true, nil); len(options) != 21 || options[0].Label != "www" || options[20].Value != "20" {
 		t.Fatalf("incorrect expansion-board input options: %+v", options)
+	}
+}
+
+func TestUnifiedEventFilters(t *testing.T) {
+	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ui.Close() })
+	for _, kind := range []string{"alarm", "info", "state", "command"} {
+		if err := ui.store.addEvent(t.Context(), time.Now(), kind, kind); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := ui.Handler()
+	mark := httptest.NewRequest(http.MethodPost, "/api/notifications/2/read", nil)
+	mark.Header.Set("X-Boiler-Mate", "1")
+	marked := httptest.NewRecorder()
+	handler.ServeHTTP(marked, mark)
+	if marked.Code != http.StatusNoContent {
+		t.Fatalf("could not mark information read: %d %s", marked.Code, marked.Body.String())
+	}
+	for _, check := range []struct {
+		path string
+		want []string
+	}{
+		{"/api/events", []string{"command", "state", "info", "alarm"}},
+		{"/api/events?filter=unread", []string{"command", "alarm"}},
+		{"/api/events?filter=unread&before=4", []string{"alarm"}},
+		{"/api/events?filter=state", []string{"state"}},
+		{"/api/events?filter=notices", []string{"command", "info", "alarm"}},
+		{"/api/notifications", []string{"command", "info", "alarm"}},
+	} {
+		t.Run(check.path, func(t *testing.T) {
+			result := httptest.NewRecorder()
+			handler.ServeHTTP(result, httptest.NewRequest(http.MethodGet, check.path, nil))
+			var rows []event
+			if err := json.Unmarshal(result.Body.Bytes(), &rows); err != nil || result.Code != http.StatusOK {
+				t.Fatalf("status %d, body %s, error %v", result.Code, result.Body.String(), err)
+			}
+			var kinds []string
+			for _, row := range rows {
+				kinds = append(kinds, row.Kind)
+			}
+			if !slices.Equal(kinds, check.want) {
+				t.Fatalf("returned %v, want %v", kinds, check.want)
+			}
+		})
 	}
 }
 

@@ -4,7 +4,7 @@ const navigation = [
   ['Monitor', [
     ['overview', 'Overview', '◈'], ['live-data', 'Live data', '◉'],
     ['charts', 'Charts', '∿'], ['consumption', 'Consumption', '▥'],
-    ['events', 'Events', '☷'], ['messages', 'Messages', '▤'], ['notifications', 'Notifications', '◇'],
+    ['events', 'Events', '☷'],
   ]],
   ['Controller', [
     ['boiler', 'Boiler', '▣'], ['fuel', 'Hopper & feed', '▧'], ['hot-water', 'DHW', '◉'],
@@ -340,7 +340,7 @@ function renderCombustion(target) {
 function overview(token) {
   const live = dom('div',{id:'overview-live'});
   const chartBody = dom('div',{},empty('Loading temperature history…'));
-  const recent = dom('div',{},empty('Loading recent messages…'));
+  const recent = dom('div',{},empty('Loading recent events…'));
   const metricsPanel = dom('div',{},empty('Waiting for telemetry…'));
   const customise = dom('details',{},dom('summary',{},'Choose overview readings'),metricsPanel);
   main.replaceChildren(heading('Pellet boiler'),
@@ -348,7 +348,7 @@ function overview(token) {
       card('Combustion',null,dom('div',{class:'combustion-grid',id:'overview-combustion'})),
       dom('div',{class:'grid split'},
         card('Temperature · 24 hours',null,chartBody,dom('a',{class:'home-link',href:'#charts'},'All charts')),
-        card('Controller messages',null,recent,dom('a',{class:'home-link',href:'#messages'},'View inbox'))),
+        card('Recent events',null,recent,dom('a',{class:'home-link',href:'#events'},'View all events'))),
       card('Other readings',null,dom('div',{class:'compact-readings',id:'overview-custom'}),customise)));
   updateOverview();
   const renderChooser = ()=>chooseSignals(metricsPanel,chosenMetrics,selection=>{
@@ -370,7 +370,7 @@ function overview(token) {
   };
   refreshPageHistory = refreshChart;
   refreshChart(true);
-  api('notifications').then(items=>{if(token===generation) recent.replaceChildren(noticeList(items.slice(0,4),false));})
+  api('events').then(items=>{if(token===generation) recent.replaceChildren(eventList(items.slice(0,4)));})
     .catch(error=>recent.replaceChildren(empty(error.message)));
 }
 
@@ -575,51 +575,69 @@ function consumptionTable(data) {
     })));
 }
 
-function noticeList(rows,actions) {
-  if(!rows.length)return empty('No messages here.');
+function eventList(rows,onRead) {
+  if(!rows.length)return empty('No events to show.');
   return dom('ul',{class:'notice-list'},rows.map(row=>dom('li',{},
     pill(textLabel(row.kind),row.kind==='alarm'?'error':row.kind==='connection'?'warn':''),
     dom('div',{},dom('strong',{},row.message),dom('small',{},datetime.format(new Date(row.time*1000)))),
-    actions&&!row.read&&btn('Mark read',async event=>{
-      event.currentTarget.disabled=true;
-      try {await api('notifications/'+row.id+'/read',{method:'POST'});event.currentTarget?.remove();renderPage();}
-      catch(error){toast(error.message);renderPage();}
+    onRead&&!row.read&&row.kind!=='state'&&btn('Mark read',async event=>{
+      const button=event.currentTarget;
+      button.disabled=true;
+      try {
+        await api('notifications/'+row.id+'/read',{method:'POST'});
+        row.read=true;
+        onRead();
+      } catch(error) {
+        button.disabled=false;
+        toast(error.message);
+      }
     },'subtle'))));
 }
-function activity(token,noticeMode) {
-  const title=noticeMode?'Messages':'Events';
-  const description=noticeMode?'Local inbox for controller alarms, information, and communication changes.':
-    'Boiler state transitions, controller notices, and commands acknowledged by the controller.';
-  const entries=dom('div',{},empty('Loading '+title.toLowerCase()+'…'));
-  const filter=dom('select',{'aria-label':'Filter '+title.toLowerCase()},
-    [['all','All'],['unread','Unread'],['alarm','Alarms'],['info','Information'],['connection','Connection'],
-      ...(!noticeMode?[['state','State changes'],['command','Commands']]:[])].map(([key,label])=>dom('option',{value:key},label)));
+function activity(token,initialFilter,notificationsOpen) {
+  const entries=dom('div',{});
+  const filter=dom('select',{'aria-label':'Filter events'},
+    [['','All events'],['notices','Notices'],['unread','Unread notices'],['alarm','Alarms'],['info','Information'],
+      ['connection','Connection'],['state','State changes'],['command','Commands']]
+      .map(([key,label])=>dom('option',{value:key,selected:key===initialFilter},label)));
   const more=btn('Load older',()=>load(true));
   more.hidden=true;
   let rows=[];
-  function render() {
-    const shown=rows.filter(row=>filter.value==='all'||(filter.value==='unread'?!row.read:row.kind===filter.value));
-    entries.replaceChildren(noticeList(shown,noticeMode));
-  }
-  filter.addEventListener('change',render);
+  let request=0;
+  const render=()=>{
+    if(token!==generation)return;
+    const shown=filter.value==='unread'?rows.filter(row=>!row.read):rows;
+    entries.replaceChildren(eventList(shown,render));
+  };
   const load=async older=>{
+    const id=++request;
+    const args=new URLSearchParams();
+    if(filter.value)args.set('filter',filter.value);
+    if(older)args.set('before',rows.at(-1).id);
+    else {
+      rows=[];
+      more.hidden=true;
+      entries.replaceChildren(empty('Loading events…'));
+    }
     more.disabled=true;
     try {
-      const endpoint=noticeMode?'notifications':'events';
-      const result=await api(endpoint+(older?'?before='+rows.at(-1).id:''));
-      if(token!==generation)return;
+      const result=await api('events?'+args);
+      if(token!==generation||id!==request)return;
       rows=older?[...rows,...result]:result;
       more.hidden=result.length<150;
       render();
-    } catch(error) {entries.replaceChildren(empty(error.message));}
-    finally {more.disabled=false;}
+    } catch(error) {
+      if(token!==generation||id!==request)return;
+      if(older)toast(error.message);
+      else entries.replaceChildren(empty(error.message),btn('Try again',()=>load(false)));
+    } finally {if(id===request)more.disabled=false;}
   };
-  main.replaceChildren(heading(title,description),
-    card(noticeMode?'Inbox':'Recent activity',null,dom('div',{class:'toolbar'},dom('label',{},'Filter',filter)),entries,more));
+  filter.addEventListener('change',()=>load(false));
+  main.replaceChildren(heading('Events'),dom('div',{class:'stack'},
+    dom('section',{class:'card'},desktopNotifications(notificationsOpen)),
+    dom('section',{class:'card'},dom('div',{class:'toolbar'},filter),entries,more)));
   load(false);
 }
-function notifications(token) {
-  const result=dom('div',{},empty('Loading recent notifications…'));
+function desktopNotifications(open) {
   const desktop=btn(typeof Notification!=='undefined'&&Notification.permission==='granted'?'Desktop notifications enabled':'Enable desktop notices',async ()=>{
     if(typeof Notification==='undefined'||!window.isSecureContext){toast('Desktop notices need HTTPS or a localhost connection.');return;}
     const permission=await Notification.requestPermission();
@@ -632,16 +650,13 @@ function notifications(token) {
       noticeFilter=event.target.checked?[...noticeFilter,kind]:noticeFilter.filter(item=>item!==kind);
       saveLocal('noticeFilter',noticeFilter);
     }}),label)));
-  main.replaceChildren(heading('Notifications','Choose which controller notices can appear on this browser.'),
-    dom('div',{class:'stack'},card('Desktop notifications','Boiler Mate can show notices while this dashboard is open.',inputs,desktop),
-      card('Recent notifications',null,result,dom('a',{class:'home-link',href:'#messages'},'Open messages'))));
-  api('notifications').then(items=>{if(token===generation)result.replaceChildren(noticeList(items.slice(0,8),true));})
-    .catch(error=>result.replaceChildren(empty(error.message)));
+  return dom('details',{open},dom('summary',{},'Desktop notifications'),
+    dom('p',{},'Choose which notices this browser can show while Boiler Mate is open.'),inputs,desktop);
 }
 async function checkDesktopNotices() {
   if(typeof Notification==='undefined'||Notification.permission!=='granted')return;
   try {
-    const rows=await api('notifications');
+    const rows=await api('events?filter=notices');
     if(noticeReady)rows.filter(row=>row.id>lastDesktopNotice&&noticeFilter.includes(row.kind)&&!row.read)
       .reverse().forEach(row=>new Notification('Boiler Mate', {body:row.message,icon:'/icon-192.png',tag:'boiler-'+row.id}));
     lastDesktopNotice=Math.max(lastDesktopNotice,rows[0]?.id??0);
@@ -807,8 +822,8 @@ function helpPage() {
     ['Why is the interface read only?','Writes require BOILER_MATE_ENABLE_WRITES=true and a controller PIN. Controls pause when readings become stale.'],
     ['How are charts and consumption stored?','Charts are recorded by this instance and require a persistent data directory. Pellet consumption periods come from the controller itself.'],
     ['How do schedules work?','Boiler and hot-water schedules are stored in the controller and follow its clock. Change the relevant schedule enable setting after reviewing the weekly blocks.'],
-    ['What do controller statuses mean?','Statuses describe the current operating stage or an alarm. Open Messages for controller information and Events for the local activity log. Address the cause at the boiler before resetting an alarm.'],
-    ['How can I change the dashboard?','Open Dashboard display on the overview to choose up to four readings. Choose signals and periods independently on Charts. Selections are stored in this browser.'],
+    ['What do controller statuses mean?','Statuses describe the current operating stage or an alarm. Events includes controller notices, the activity log, and desktop notification settings. Address the cause at the boiler before resetting an alarm.'],
+    ['How can I change the dashboard?','Open Choose overview readings on Overview to select additional readings. Choose signals and periods independently on Charts. Selections are stored in this browser.'],
     ['Where do I find help for a setting?','Open Help below a setting for its purpose and controller-reported range. Consult the manual for firmware-specific wiring and service procedures.'],
   ];
   main.replaceChildren(heading('Help & information','Operation, history, and troubleshooting for this Boiler Mate instance.'),
@@ -824,7 +839,7 @@ function renderPage() {
   refreshPageHistory = null;
   resizeChart = null;
   const [hashPage,requestedSection]=window.location.hash.slice(1).split('/');
-  const requested=hashPage==='advanced-data'?'live-data':hashPage;
+  const requested=({ 'advanced-data':'live-data', messages:'events', notifications:'events' })[hashPage]??hashPage;
   page=navigation.flatMap(([,items])=>items).some(([id])=>id===requested)?requested:'overview';
   const sections=groups[page]?.[2] ?? (page==='consumption'?consumptionPeriods:[]);
   const [section,sectionLabel]=sections.find(([id,,slug=id])=>slug===requestedSection) ?? sections[0] ?? [];
@@ -835,8 +850,7 @@ function renderPage() {
   else if (page==='overview') overview(token);
   else if (page==='charts') charts(token);
   else if (page==='consumption') consumption(section,token);
-  else if (page==='events'||page==='messages') activity(token,page==='messages');
-  else if (page==='notifications') notifications(token);
+  else if (page==='events') activity(token,hashPage==='messages'?'notices':'',hashPage==='notifications'||requestedSection==='notifications');
   else helpPage();
 }
 

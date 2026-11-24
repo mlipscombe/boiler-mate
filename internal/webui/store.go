@@ -166,13 +166,19 @@ func (s *store) addEvent(ctx context.Context, at time.Time, kind, message string
 	return err
 }
 
-func (s *store) events(ctx context.Context, before int64, notices bool) ([]event, error) {
+func (s *store) events(ctx context.Context, before int64, filter string) ([]event, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, time, kind, message, seen
 		FROM events
-		WHERE (? = 0 OR id < ?) AND (NOT ? OR kind <> 'state')
+		WHERE (@before = 0 OR id < @before)
+		  AND CASE @filter
+			WHEN '' THEN 1
+			WHEN 'notices' THEN kind <> 'state'
+			WHEN 'unread' THEN kind <> 'state' AND seen = 0
+			ELSE kind = @filter
+		  END
 		ORDER BY id DESC LIMIT 150
-	`, before, before, notices)
+	`, sql.Named("before", before), sql.Named("filter", filter))
 	if err != nil {
 		return nil, err
 	}

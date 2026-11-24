@@ -283,16 +283,22 @@ func (ui *UI) getHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (ui *UI) getEvents(w http.ResponseWriter, r *http.Request) {
-	ui.listEvents(w, r, false)
+	filter := r.URL.Query().Get("filter")
+	switch filter {
+	case "", "notices", "unread", "alarm", "info", "connection", "state", "command":
+		ui.listEvents(w, r, filter)
+	default:
+		problem(w, http.StatusBadRequest, "Unknown event filter.")
+	}
 }
 
 func (ui *UI) getNotices(w http.ResponseWriter, r *http.Request) {
-	ui.listEvents(w, r, true)
+	ui.listEvents(w, r, "notices")
 }
 
-func (ui *UI) listEvents(w http.ResponseWriter, r *http.Request, notices bool) {
+func (ui *UI) listEvents(w http.ResponseWriter, r *http.Request, filter string) {
 	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
-	events, err := ui.store.events(r.Context(), before, notices)
+	events, err := ui.store.events(r.Context(), before, filter)
 	if err != nil {
 		ui.serverError(w, "read events", err)
 		return
