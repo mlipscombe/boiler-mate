@@ -42,6 +42,7 @@ type UI struct {
 	lastSample map[string]time.Time
 	changed    chan struct{}
 	historyRev uint64
+	eventRev   uint64
 	lastState  string
 	lastInfo   string
 	offline    bool
@@ -187,7 +188,9 @@ func infoMessage(info string) string {
 }
 
 func (ui *UI) addEvent(ctx context.Context, at time.Time, kind, message string) {
-	if err := ui.store.addEvent(ctx, at, kind, message); err != nil && ctx.Err() == nil {
+	if err := ui.store.addEvent(ctx, at, kind, message); err == nil {
+		ui.signalEventChange()
+	} else if ctx.Err() == nil {
 		ui.logger.Warn("Could not save event", "kind", kind, "error", err)
 	}
 }
@@ -321,6 +324,7 @@ func (ui *UI) markRead(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusNotFound, "Event not found.")
 		return
 	}
+	ui.signalEventChange()
 	w.WriteHeader(http.StatusNoContent)
 }
 

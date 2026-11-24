@@ -89,6 +89,7 @@ let statusRequest = 0;
 let statusSource = null;
 let statusPoll = 0;
 let refreshPageHistory = null;
+let refreshPageEvents = null;
 let resizeChart = null;
 let toastTimer = 0;
 let noticeReady = false;
@@ -203,7 +204,7 @@ function refreshChrome() {
   access.textContent = status.control ? 'Controls enabled' : 'Read only';
   access.className = 'pill '+(status.control?'good':'warn');
 }
-function applyStatus(next) {
+function applyStatus(next, resuming = false) {
   const previous = status;
   status = next;
   refreshChrome();
@@ -213,13 +214,17 @@ function applyStatus(next) {
     reading.textContent = display(signal(reading.dataset.liveMetric));
   }
   if (status.historyRevision!==previous.historyRevision) refreshPageHistory?.();
+  if (resuming || status.eventRevision!==previous.eventRevision) refreshPageEvents?.();
 }
-async function refresh() {
+async function refresh(resuming = false) {
   const request = ++statusRequest;
   let next;
   try { next = await api('status'); }
-  catch { next = {...status,online:false,control:false}; }
-  if (statusRequest===request) applyStatus(next);
+  catch {
+    next = {...status,online:false,control:false};
+    resuming = false;
+  }
+  if (statusRequest===request) applyStatus(next,resuming);
 }
 function stopStatusPolling() {
   clearInterval(statusPoll);
@@ -227,7 +232,7 @@ function stopStatusPolling() {
 }
 function startStatusPolling() {
   if (statusPoll || document.hidden) return;
-  refresh();
+  refresh(true);
   statusPoll = setInterval(refresh,5000);
 }
 function stopStatusStream() {
@@ -248,6 +253,8 @@ function connectWhileVisible() {
   }
   const source = new EventSource('/api/status/stream');
   statusSource = source;
+  let resuming = true;
+  source.onopen = ()=>{resuming=true;};
   source.onmessage = event=>{
     if (statusSource!==source) return;
     let next;
@@ -255,7 +262,8 @@ function connectWhileVisible() {
     catch { startStatusPolling(); return; }
     statusRequest++;
     stopStatusPolling();
-    applyStatus(next);
+    applyStatus(next,resuming);
+    resuming=false;
   };
   source.onerror = ()=>{ if (statusSource===source) startStatusPolling(); };
 }
@@ -585,8 +593,7 @@ function eventList(rows,onRead) {
       button.disabled=true;
       try {
         await api('notifications/'+row.id+'/read',{method:'POST'});
-        row.read=true;
-        onRead();
+        onRead(row.id);
       } catch(error) {
         button.disabled=false;
         toast(error.message);
@@ -599,43 +606,94 @@ function activity(token,initialFilter,notificationsOpen) {
     [['','All events'],['notices','Notices'],['unread','Unread notices'],['alarm','Alarms'],['info','Information'],
       ['connection','Connection'],['state','State changes'],['command','Commands']]
       .map(([key,label])=>dom('option',{value:key,selected:key===initialFilter},label)));
-  const more=btn('Load older',()=>load(true));
+  const more=btn('Load older',()=>load('older'));
   more.hidden=true;
+  const seen=new Set();
   let rows=[];
   let request=0;
-  const render=()=>{
+  let loading=false;
+  let refreshPending=false;
+  let initialized=false;
+  const markRead=id=>{
     if(token!==generation)return;
-    const shown=filter.value==='unread'?rows.filter(row=>!row.read):rows;
-    entries.replaceChildren(eventList(shown,render));
+    seen.add(id);
+    const row=rows.find(item=>item.id===id);
+    if(row&&!row.read){
+      row.read=true;
+      render();
+    }
   };
-  const load=async older=>{
+  const render=()=>{
+    const shown=filter.value==='unread'?rows.filter(row=>!row.read):rows;
+    entries.replaceChildren(eventList(shown,markRead));
+  };
+  const refreshEvents=()=>{
+    if(document.hidden)return;
+    if(loading)refreshPending=true;
+    else load('refresh');
+  };
+  const load=async mode=>{
+    const older=mode==='older';
+    const refreshing=mode==='refresh';
     const id=++request;
+    const current=()=>token===generation&&id===request;
     const args=new URLSearchParams();
     if(filter.value)args.set('filter',filter.value);
     if(older)args.set('before',rows.at(-1).id);
-    else {
+    const through=refreshing?rows.at(-1)?.id:undefined;
+    if(mode==='reset'){
       rows=[];
+      initialized=false;
       more.hidden=true;
       entries.replaceChildren(empty('Loading events…'));
     }
+    loading=true;
     more.disabled=true;
     try {
-      const result=await api('events?'+args);
-      if(token!==generation||id!==request)return;
-      rows=older?[...rows,...result]:result;
-      more.hidden=result.length<150;
-      render();
+      const result=[];
+      let hasOlder;
+      while(true){
+        const batch=await api('events?'+args);
+        if(!current()||(refreshing&&document.hidden))return;
+        // Keep the already loaded history without pulling in an extra page of older entries.
+        const pageRows=result.length&&refreshing?batch.filter(row=>row.id>=through):batch;
+        result.push(...pageRows);
+        hasOlder=batch.length===150||pageRows.length<batch.length;
+        const oldest=batch.at(-1)?.id;
+        if(!hasOlder||!(oldest>through))break;
+        args.set('before',oldest);
+      }
+      const updated=(older?[...rows,...result]:result).filter(row=>{
+        if(seen.has(row.id))row.read=true;
+        return filter.value!=='unread'||!row.read;
+      });
+      const changed=!initialized||updated.length!==rows.length||
+        updated.some((row,index)=>row.id!==rows[index].id||row.read!==rows[index].read);
+      rows=updated;
+      initialized=true;
+      more.hidden=!hasOlder||!rows.length;
+      if(changed)render();
     } catch(error) {
-      if(token!==generation||id!==request)return;
+      if(!current())return;
       if(older)toast(error.message);
-      else entries.replaceChildren(empty(error.message),btn('Try again',()=>load(false)));
-    } finally {if(id===request)more.disabled=false;}
+      else if(!initialized)entries.replaceChildren(empty(error.message),btn('Try again',()=>load('reset')));
+    } finally {
+      if(current()){
+        loading=false;
+        more.disabled=false;
+        if(refreshPending){
+          refreshPending=false;
+          refreshEvents();
+        }
+      }
+    }
   };
-  filter.addEventListener('change',()=>load(false));
+  filter.addEventListener('change',()=>load('reset'));
   main.replaceChildren(heading('Events'),dom('div',{class:'stack'},
     dom('section',{class:'card'},desktopNotifications(notificationsOpen)),
     dom('section',{class:'card'},dom('div',{class:'toolbar'},filter),entries,more)));
-  load(false);
+  refreshPageEvents=refreshEvents;
+  load('reset');
 }
 function desktopNotifications(open) {
   const desktop=btn(typeof Notification!=='undefined'&&Notification.permission==='granted'?'Desktop notifications enabled':'Enable desktop notices',async ()=>{
@@ -837,6 +895,7 @@ function helpPage() {
 
 function renderPage() {
   refreshPageHistory = null;
+  refreshPageEvents = null;
   resizeChart = null;
   const [hashPage,requestedSection]=window.location.hash.slice(1).split('/');
   const requested=({ 'advanced-data':'live-data', messages:'events', notifications:'events' })[hashPage]??hashPage;

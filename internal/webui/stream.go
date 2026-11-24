@@ -16,12 +16,20 @@ type dashboardStatus struct {
 	Online          bool                `json:"online"`
 	Control         bool                `json:"control"`
 	HistoryRevision uint64              `json:"historyRevision"`
+	EventRevision   uint64              `json:"eventRevision"`
 }
 
 // signalChange wakes the streams without holding a queue of past readings. The caller holds ui.mu.
 func (ui *UI) signalChange() {
 	close(ui.changed)
 	ui.changed = make(chan struct{})
+}
+
+func (ui *UI) signalEventChange() {
+	ui.mu.Lock()
+	defer ui.mu.Unlock()
+	ui.eventRev++
+	ui.signalChange()
 }
 
 func (ui *UI) statusSnapshot(telemetryOnly bool) (dashboardStatus, <-chan struct{}) {
@@ -41,7 +49,7 @@ func (ui *UI) statusSnapshot(telemetryOnly bool) (dashboardStatus, <-chan struct
 	latest := data["operating_data"].At
 	return dashboardStatus{
 		Serial: ui.serial, Data: data, Online: !latest.IsZero() && time.Since(latest) < 20*time.Second,
-		Control: ui.write != nil, HistoryRevision: ui.historyRev,
+		Control: ui.write != nil, HistoryRevision: ui.historyRev, EventRevision: ui.eventRev,
 	}, ui.changed
 }
 

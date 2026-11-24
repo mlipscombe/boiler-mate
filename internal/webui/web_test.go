@@ -278,7 +278,7 @@ func TestStatusStream(t *testing.T) {
 		t.Fatalf("unexpected stream response: %s %v", response.Status, response.Header)
 	}
 	reader := bufio.NewReader(response.Body)
-	readEvent := func(want float64) {
+	readEvent := func(want float64, revision uint64) {
 		t.Helper()
 		line, err := reader.ReadString('\n')
 		value, ok := strings.CutPrefix(strings.TrimSpace(line), "data: ")
@@ -289,17 +289,30 @@ func TestStatusStream(t *testing.T) {
 		if err := json.Unmarshal([]byte(value), &status); err != nil {
 			t.Fatal(err)
 		}
-		if got := status.Data["operating_data"].Values["boiler_temp"]; got != want || !status.Online || status.Control || len(status.Data) != 1 {
+		if got := status.Data["operating_data"].Values["boiler_temp"]; got != want || status.EventRevision != revision ||
+			!status.Online || status.Control || len(status.Data) != 1 {
 			t.Fatalf("unexpected dashboard status: %+v", status)
 		}
 		if separator, err := reader.ReadString('\n'); separator != "\n" || err != nil {
 			t.Fatalf("invalid event separator %q: %v", separator, err)
 		}
 	}
-	readEvent(42)
+	readEvent(42, 0)
 	time.Sleep(250 * time.Millisecond)
 	ui.Observe(t.Context(), "operating_data", map[string]any{"boiler_temp": int64(43)})
-	readEvent(43)
+	readEvent(43, 0)
+
+	ui.addEvent(t.Context(), time.Now(), "info", "New fixture notice")
+	readEvent(43, 1)
+
+	mark := httptest.NewRequest(http.MethodPost, "/api/notifications/1/read", nil)
+	mark.Header.Set("X-Boiler-Mate", "1")
+	marked := httptest.NewRecorder()
+	ui.Handler().ServeHTTP(marked, mark)
+	if marked.Code != http.StatusNoContent {
+		t.Fatalf("could not mark the notice read: %d %s", marked.Code, marked.Body.String())
+	}
+	readEvent(43, 2)
 }
 
 func TestTimerRange(t *testing.T) {
