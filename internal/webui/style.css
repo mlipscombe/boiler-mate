@@ -100,7 +100,17 @@
   .system-reading span { @apply text-xs font-semibold text-muted; }
   .system-reading strong { @apply text-base leading-snug font-semibold tracking-tight; }
   .system-reading small { @apply text-xs leading-snug text-muted; }
-  .compact-readings { @apply mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4; }
+  .combustion-grid { @apply grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,2fr)]; }
+  .combustion-reading { @apply grid min-w-0 content-start gap-1 rounded-md border border-border bg-rail px-3 py-2.5; }
+  .combustion-oxygen { @apply col-span-2 border-blue-200 bg-accent-soft text-accent sm:col-span-1; }
+  .combustion-value { @apply text-2xl leading-tight font-semibold tracking-tight; }
+  .combustion-value small { @apply ml-1 text-xs font-medium tracking-normal text-muted; }
+  .combustion-compensation { @apply col-span-2 sm:col-span-3 xl:col-span-1; }
+  .combustion-compensation dl { @apply grid grid-cols-3 divide-x divide-border; }
+  .combustion-compensation dl > div { @apply px-2 first:pl-0 last:pr-0; }
+  .combustion-compensation dt { @apply text-xs text-muted; }
+  .combustion-compensation dd { @apply mt-0.5 text-base font-semibold whitespace-nowrap; }
+  .compact-readings { @apply mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4; }
   .compact-reading { @apply grid gap-1; }
   .compact-reading span { @apply text-xs text-muted; }
   .compact-reading strong { @apply text-sm font-semibold; }
@@ -128,8 +138,11 @@
   }
   .lookup { @apply w-full max-w-sm; }
   .empty { @apply py-4 text-sm text-muted; }
-  .notice-list li { @apply flex items-start gap-2.5 border-t border-border py-3 text-sm; }
+  .notice-list li { @apply grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-2.5 border-t border-border py-3 text-sm sm:grid-cols-[5.5rem_minmax(0,1fr)_auto]; }
   .notice-list li:first-child { @apply border-t-0 pt-0; }
+  .notice-list li > .pill { @apply w-full justify-center; }
+  .notice-list li > div { @apply min-w-0 wrap-break-word; }
+  .notice-list li > button { @apply col-start-2 justify-self-start sm:col-start-3; }
   .notice-list strong { @apply block font-medium; }
   .notice-list small { @apply mt-0.5 block text-xs text-muted; }
   .home-link { @apply text-sm font-semibold underline underline-offset-2; }
@@ -150,7 +163,7 @@
   .field-name { @apply min-w-0 text-sm font-medium; }
   .field-id { @apply block font-mono text-xs leading-5 break-all text-muted; }
   .field-input { @apply min-h-8 min-w-0 w-full py-1; }
-  .field-value { @apply col-span-2 text-right text-sm break-all; }
+  .field-value { @apply col-span-2 flex flex-wrap items-center justify-end gap-1.5 text-right text-sm break-all; }
   .field-action { @apply min-h-8 px-2 py-1; }
   details { @apply text-sm leading-relaxed text-muted; }
   details summary { @apply cursor-pointer font-medium text-accent; }

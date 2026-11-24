@@ -35,6 +35,7 @@ type field struct {
 	Range   *settingRange   `json:"range,omitempty"`
 	Options []settingOption `json:"options,omitempty"`
 	Timer   bool            `json:"timer,omitempty"`
+	Fixed   bool            `json:"fixed,omitempty"`
 }
 
 type settingChange struct {
@@ -82,7 +83,11 @@ func (ui *UI) getSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		label, help := settingDescription(group, key)
 		bounds := readRange(ranges.Payload, key)
-		item := field{Key: key, Value: value, Label: label, Help: help, Range: bounds, Timer: isTimer(group, key)}
+		fixed := bounds != nil && bounds.Min == bounds.Max
+		if fixed {
+			bounds = nil
+		}
+		item := field{Key: key, Value: value, Label: label, Help: help, Range: bounds, Timer: isTimer(group, key), Fixed: fixed}
 		if !item.Timer {
 			item.Options = settingOptionKind(group+"."+key, bounds).options(bounds, expanded, roles)
 		}
@@ -101,7 +106,7 @@ func readRange(payload map[string]any, key string) *settingRange {
 	maximum, hasMax := number(record["max"])
 	defaultValue, _ := number(record["default"])
 	decimals, _ := record["decimals"].(int64)
-	if !hasMin || !hasMax || minimum >= maximum || decimals < 0 || decimals > 6 {
+	if !hasMin || !hasMax || minimum > maximum || decimals < 0 || decimals > 6 {
 		return nil
 	}
 	return &settingRange{Min: minimum, Max: maximum, Default: defaultValue, Decimals: int(decimals)}
@@ -112,7 +117,7 @@ func isTimer(group, key string) bool {
 }
 
 func validSettingValue(value string, bounds *settingRange, timer bool) bool {
-	if bounds == nil || len(value) > 24 || !decimalValue.MatchString(value) {
+	if bounds == nil || bounds.Min >= bounds.Max || len(value) > 24 || !decimalValue.MatchString(value) {
 		return false
 	}
 	numeric, err := strconv.ParseFloat(value, 64)

@@ -24,14 +24,19 @@ func (readOnlyFixture) Get(_ context.Context, function nbe.Function, path string
 		switch path {
 		case "alarm.*", "alarm.output":
 			payload = map[string]any{"output": int64(0)}
+		case "hopper.*", "hopper.trip2":
+			payload = map[string]any{"trip2": int64(0)}
 		case "misc.expansion_module":
 			payload = map[string]any{"expansion_module": int64(0)}
 		}
 		return &nbe.NBEResponse{Payload: payload}, nil
 	case nbe.GetSetupRangeFunction:
 		key, maximum, defaultValue := "temp", int64(85), int64(60)
-		if strings.HasPrefix(path, "alarm.") {
+		switch {
+		case strings.HasPrefix(path, "alarm."):
 			key, maximum, defaultValue = "output", 20, 0
+		case strings.HasPrefix(path, "hopper."):
+			key, maximum, defaultValue = "trip2", 0, 0
 		}
 		return &nbe.NBEResponse{Payload: map[string]any{key: map[string]any{"min": int64(0), "max": maximum, "default": defaultValue, "decimals": int64(0)}}}, nil
 	case nbe.GetConsumptionDataFunction:
@@ -63,6 +68,7 @@ func TestControllerAPIReadOnlyChecks(t *testing.T) {
 		{"GET", "/api/status", "", false, false, 200},
 		{"GET", "/api/settings/boiler", "", false, false, 200},
 		{"GET", "/api/settings/alarm", "", false, false, 200},
+		{"GET", "/api/settings/hopper", "", false, false, 200},
 		{"GET", "/api/consumption?period=days", "", false, false, 200},
 		{"PUT", "/api/settings/boiler/temp", `{"current":"60","value":"77"}`, false, false, 403},
 		{"PUT", "/api/settings/boiler/temp", `{"current":"60","value":"78"}`, true, true, 403},
@@ -71,6 +77,7 @@ func TestControllerAPIReadOnlyChecks(t *testing.T) {
 		{"PUT", "/api/settings/boiler/temp", `{"current":"60","value":"60"}`, false, true, 204},
 		{"PUT", "/api/settings/alarm/output", `{"current":"0","value":"4"}`, false, true, 422},
 		{"PUT", "/api/settings/alarm/output", `{"current":"0","value":"14"}`, false, true, 422},
+		{"PUT", "/api/settings/hopper/trip2", `{"current":"0","value":"1"}`, false, true, 422},
 		{"POST", "/api/power", `{"action":"anything else"}`, false, true, 400},
 	} {
 		t.Run(tc.method+tc.path+tc.body, func(t *testing.T) {
@@ -106,6 +113,12 @@ func TestControllerAPIReadOnlyChecks(t *testing.T) {
 				options := data[0].Options
 				if len(options) != 10 || options[1] != (settingOption{Value: "5", Label: "Output L5 (Output pump)"}) || options[9].Value != "13" {
 					t.Fatalf("incorrect alarm relay options: %+v", options)
+				}
+			}
+			if tc.path == "/api/settings/hopper" {
+				var data []field
+				if err := json.Unmarshal(result.Body.Bytes(), &data); err != nil || len(data) != 1 || !data[0].Fixed || data[0].Range != nil {
+					t.Fatalf("expected a fixed Trip 2 counter: %+v, %v", data, err)
 				}
 			}
 		})

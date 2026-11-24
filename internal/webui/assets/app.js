@@ -2,7 +2,7 @@
 
 const navigation = [
   ['Monitor', [
-    ['overview', 'Overview', '◈'], ['live-data', 'Live data', '◉'], ['advanced-data', 'Advanced data', '▦'],
+    ['overview', 'Overview', '◈'], ['live-data', 'Live data', '◉'],
     ['charts', 'Charts', '∿'], ['consumption', 'Consumption', '▥'],
     ['events', 'Events', '☷'], ['messages', 'Messages', '▤'], ['notifications', 'Notifications', '◇'],
   ]],
@@ -27,10 +27,11 @@ const groups = {
   solar: ['Solar', 'Solar collector, cylinder temperatures, and pump settings.', [['sun','Solar circuit','solar-circuit']]],
   system: ['System', 'Controller information and service settings.', [['misc','Controller','controller'], ['manual','Service','service']]],
 };
-const monitorPages = {
-  'live-data': ['Live data','Current operating readings from the pellet boiler.','operating_data'],
-  'advanced-data': ['Advanced data','Detailed readings for diagnosing controller and burner operation.','advanced_data'],
+const readingGroups = ['operating_data','advanced_data'];
+const readingAliases = {
+  o2_corr_low:'corr_low',o2_corr_medium:'corr_medium',o2_corr_high:'corr_high',clouds:'cloud_level',
 };
+const combustionReadings = new Set(['oxygen','corr_low','corr_medium','corr_high','photo_level','smoke_temp']);
 const consumptionPeriods = [['hours','Hourly'],['days','Daily'],['months','Monthly'],['years','Yearly']];
 const labels = {
   boiler_temp: ['Boiler temperature','°C'], boiler_ref: ['Boiler target temperature','°C'],
@@ -48,7 +49,7 @@ const labels = {
   mean_out_temp: ['Average temperature','°C'], mean2_out_temp: ['Average temp. zone 2','°C'],
   chill_out: ['Chill','°C'], chill2_out: ['Chill zone 2','°C'],
   wind_speed: ['Wind speed','m/s'], wind_direction: ['Wind direction',''], air_pressure: ['Air pressure','hPa'],
-  cloud_level: ['Clouds','%'], clouds: ['Clouds','%'], humidity: ['Humidity','%'],
+  cloud_level: ['Clouds','%'], humidity: ['Humidity','%'],
   forward_temp: ['Zone 1 T6','°C'], forward2_temp: ['Zone 2','°C'],
   forward_ref: ['Zone 1 flow temperature target','°C'], forward2_ref: ['Zone 2 flow temperature target','°C'],
   sun_temp: ['Sun panel','°C'], sun2_temp: ['Sun panel 2','°C'], sun_dhw_temp: ['DHW bottom','°C'],
@@ -72,7 +73,6 @@ const labels = {
   o2_gain_pellets: ['Pellet gain P',''], o2_gain_pellets_i: ['Pellet gain I',''],
   o2_part_i: ['Air change gain I','%'], o2_part_p: ['Air change gain P','%'],
   o2_power_actual: ['Actual O2','%'], o2_power_total: ['Total O2 change','%'], o2_power_max: ['Max. O2 change','%'],
-  o2_corr_low: ['Corr. fuel low','%'], o2_corr_medium: ['Corr. fuel mid','%'], o2_corr_high: ['Corr. fuel high','%'],
   auger_run: ['Auger runtime','s'], auger_pause: ['Auger pause time','s'],
 };
 const labelCapitalization = {dhw:'DHW',o2:'O2',kw:'kW',i:'I',p:'P',rpm:'RPM',id:'ID',dl:'DL'};
@@ -95,7 +95,8 @@ let noticeReady = false;
 let lastDesktopNotice = 0;
 let noticeFilter = saved('noticeFilter', ['alarm','info','connection']);
 let chosenSignals = saved('signals',['operating_data.boiler_temp','operating_data.boiler_ref']);
-let chosenMetrics = saved('metrics',['operating_data.oxygen','operating_data.smoke_temp','operating_data.external_temp','operating_data.air_flow']);
+let chosenMetrics = saved('metrics',['operating_data.external_temp','operating_data.air_flow'])
+  .filter(key=>!combustionReadings.has(readingName(key)));
 
 function dom(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -132,11 +133,15 @@ function snapshot(group) { return status.data[group]?.values ?? {}; }
 function signal(key) {
   const [group,name] = key.split('.');
   const value = snapshot(group)[name];
-  if (labels[name]?.[1] === '°C' && typeof value === 'number' && value >= 999) return null;
+  if (unitSignal(key) === '°C' && typeof value === 'number' && value >= 999) return null;
   return value;
 }
-function titleSignal(key) { return textLabel(key.split('.').at(-1)); }
-function unitSignal(key) { return labels[key.split('.').at(-1)]?.[1] ?? ''; }
+function readingName(key) {
+  const name = key.split('.').at(-1);
+  return Object.hasOwn(readingAliases,name) ? readingAliases[name] : name;
+}
+function titleSignal(key) { return textLabel(readingName(key)); }
+function unitSignal(key) { return labels[readingName(key)]?.[1] ?? ''; }
 function heading(title,description,actions) {
   return dom('div',{class:'page-heading'},dom('div',{},dom('h1',{},title),description && dom('p',{},description)),actions);
 }
@@ -203,8 +208,7 @@ function applyStatus(next) {
   status = next;
   refreshChrome();
   if (page === 'overview') updateOverview();
-  const readingsGroup = monitorPages[page]?.[2];
-  if (readingsGroup && previous.data[readingsGroup]?.at!==status.data[readingsGroup]?.at) updateReadings();
+  if (page==='live-data' && readingGroups.some(group=>previous.data[group]?.at!==status.data[group]?.at)) updateReadings();
   for (const reading of main.querySelectorAll('[data-live-metric]')) {
     reading.textContent = display(signal(reading.dataset.liveMetric));
   }
@@ -302,6 +306,8 @@ function updateOverview() {
         blocked&&dom('p',{},blocked))),
     dom('div',{class:'system-line'},readings.map(([label,value,detail,link]) =>
       dom('a',{class:'system-reading',href:link},dom('span',{},label),dom('strong',{},value),dom('small',{},detail))))));
+  const combustion = document.getElementById('overview-combustion');
+  if (combustion) renderCombustion(combustion);
   const custom = document.getElementById('overview-custom');
   if (custom) custom.replaceChildren(...chosenMetrics.map(key=>{
     const value=signal(key);
@@ -313,26 +319,44 @@ function updateOverview() {
 function withUnit(value,unit) {
   return display(value)+(value==null||!unit?'':' '+unit);
 }
+function renderCombustion(target) {
+  const reading = (name,key,emphasis=false)=>{
+    const value = status.online ? signal('operating_data.'+key) : null;
+    return dom('div',{class:'combustion-reading'+(emphasis?' combustion-oxygen':'')},
+      dom('span',{class:'metric-label'},name),
+      dom('strong',{class:'combustion-value'},display(value),value!=null&&dom('small',{},unitSignal(key))));
+  };
+  const compensation = [['Low','corr_low'],['Medium','corr_medium'],['High','corr_high']];
+  target.replaceChildren(
+    reading('Oxygen','oxygen',true),
+    reading('Photo sensor','photo_level'),
+    reading('Chimney smoke','smoke_temp'),
+    dom('div',{class:'combustion-reading combustion-compensation'},dom('span',{class:'metric-label'},'O2 compensation'),
+      dom('dl',{},compensation.map(([name,key])=>{
+        const value = status.online ? signal('operating_data.'+key) ?? signal('advanced_data.o2_'+key) : null;
+        return dom('div',{},dom('dt',{},name),dom('dd',{},withUnit(value,'%')));
+      }))));
+}
 function overview(token) {
   const live = dom('div',{id:'overview-live'});
   const chartBody = dom('div',{},empty('Loading temperature history…'));
   const recent = dom('div',{},empty('Loading recent messages…'));
   const metricsPanel = dom('div',{},empty('Waiting for telemetry…'));
-  const customise = dom('details',{},dom('summary',{},'Choose overview readings'),
-    dom('p',{class:'muted text-xs'},'Choose up to four readings. When all four are selected, a new one replaces the oldest selection.'),metricsPanel);
+  const customise = dom('details',{},dom('summary',{},'Choose overview readings'),metricsPanel);
   main.replaceChildren(heading('Pellet boiler'),
     dom('div',{class:'stack'},live,
+      card('Combustion',null,dom('div',{class:'combustion-grid',id:'overview-combustion'})),
       dom('div',{class:'grid split'},
         card('Temperature · 24 hours',null,chartBody,dom('a',{class:'home-link',href:'#charts'},'All charts')),
         card('Controller messages',null,recent,dom('a',{class:'home-link',href:'#messages'},'View inbox'))),
       card('Other readings',null,dom('div',{class:'compact-readings',id:'overview-custom'}),customise)));
   updateOverview();
-  const renderChooser = ()=>chooseSignals(metricsPanel,chosenMetrics,4,selection=>{
+  const renderChooser = ()=>chooseSignals(metricsPanel,chosenMetrics,selection=>{
     chosenMetrics=selection;
     saveLocal('metrics',selection);
     updateOverview();
     renderChooser();
-  },{replaceOldest:true});
+  },{exclude:combustionReadings});
   customise.addEventListener('toggle',()=>{if(customise.open)renderChooser();});
   let historyRequest = 0;
   const refreshChart = async(showError=false)=>{
@@ -350,27 +374,36 @@ function overview(token) {
     .catch(error=>recent.replaceChildren(empty(error.message)));
 }
 
-function measurementKeys() {
-  const keys = new Set([...Object.keys(labels).map(key=>'operating_data.'+key),...chosenSignals,...chosenMetrics]);
-  for (const group of ['operating_data','advanced_data']) {
-    for (const [key,value] of Object.entries(snapshot(group))) {
-      if (typeof value==='number' && !['time','state','substate'].includes(key)) keys.add(group+'.'+key);
+function liveReadingKeys() {
+  const keys = new Map();
+  for (const group of readingGroups) {
+    for (const name of Object.keys(snapshot(group))) {
+      const key = group+'.'+name;
+      const canonical = readingName(name);
+      if (!keys.has(canonical) || signal(keys.get(canonical))==null) keys.set(canonical,key);
     }
   }
-  for (const key of keys) if (signal(key)==null && !chosenSignals.includes(key) && !chosenMetrics.includes(key)) keys.delete(key);
+  return [...keys.values()];
+}
+function measurementKeys(selected) {
+  const keys = new Set(selected);
+  const selectedNames = new Set(selected.map(readingName));
+  for (const key of liveReadingKeys()) {
+    const name = readingName(key);
+    if (!selectedNames.has(name) && typeof signal(key)==='number' && !['time','state','substate'].includes(name)) keys.add(key);
+  }
   return [...keys].sort((a,b)=>titleSignal(a).localeCompare(titleSignal(b))||a.localeCompare(b));
 }
-function chooseSignals(target,selected,limit,change,{replaceOldest=false}={}) {
-  const keys = measurementKeys();
+function chooseSignals(target,selected,change,{limit=Infinity,exclude}={}) {
+  const keys = measurementKeys(selected).filter(key=>!exclude?.has(readingName(key)));
   const previous = target.querySelector('.signal-chooser');
   const focused = previous?.contains(document.activeElement) ? document.activeElement.value : null;
   const scrollTop = previous?.scrollTop ?? 0;
   const chooser = dom('div',{class:'signal-chooser'},keys.map(key=>{
     const checked = selected.includes(key);
     return dom('label',{},dom('input',{type:'checkbox',value:key,checked,
-      disabled:!replaceOldest&&!checked&&selected.length>=limit,
-      onchange:()=>change(checked?selected.filter(k=>k!==key):[...selected,key].slice(-limit))}),titleSignal(key),
-      key.startsWith('advanced_data.')?' · Advanced':'');
+      disabled:!checked&&selected.length>=limit,
+      onchange:()=>change(checked?selected.filter(k=>k!==key):[...selected,key])}),titleSignal(key));
   }));
   target.replaceChildren(keys.length ? chooser : empty('Measurements will appear after the first controller reading.'));
   chooser.scrollTop = scrollTop;
@@ -413,9 +446,9 @@ function charts(token) {
       if(request===id&&token===generation&&showLoading)chartBody.replaceChildren(empty(error.message));
     }
   };
-  const choose = ()=>chooseSignals(signals,chosenSignals,8,selection=>{
+  const choose = ()=>chooseSignals(signals,chosenSignals,selection=>{
     chosenSignals=selection; saveLocal('signals',selection); choose(); load();
-  });
+  },{limit:8});
   main.replaceChildren(heading('Charts','Compare live signals recorded by Boiler Mate. History starts when this instance is enabled.'),
     card('Signal history','Each signal keeps its own unit.',
       dom('div',{class:'toolbar'},dom('label',{},'Period',range),csv),
@@ -615,30 +648,27 @@ async function checkDesktopNotices() {
     noticeReady=true;
   } catch {}
 }
-function dataTable(type,query) {
-  const data=snapshot(type);
-  const entries=Object.entries(data).sort(([a],[b])=>textLabel(a).localeCompare(textLabel(b)));
+function dataTable(query) {
+  const entries=liveReadingKeys().sort((a,b)=>titleSignal(a).localeCompare(titleSignal(b)));
   if(!entries.length)return empty('The controller has not returned these readings.');
-  const results=entries.filter(([key])=>[key,textLabel(key)].some(label=>label.toLowerCase().includes(query)));
+  const results=entries.filter(key=>[key,titleSignal(key)].some(label=>label.toLowerCase().includes(query)));
   if(!results.length)return empty('No readings match.');
   return dom('div',{class:'table-scroll'},dom('table',{},
     dom('thead',{},dom('tr',{},dom('th',{scope:'col'},'Signal'),dom('th',{scope:'col'},'Reading'))),
-    dom('tbody',{},results.map(([key,value])=>dom('tr',{},
-      dom('th',{scope:'row'},textLabel(key)),dom('td',{},[display(value),labels[key]?.[1]].filter(Boolean).join(' ')))))));
+    dom('tbody',{},results.map(key=>dom('tr',{},
+      dom('th',{scope:'row'},titleSignal(key)),dom('td',{},withUnit(signal(key),unitSignal(key))))))));
 }
 function updateReadings() {
   const filter=document.getElementById('readings-filter');
   if(!filter)return;
-  const type=monitorPages[page][2];
-  const timestamp=status.data[type]?.at;
+  const timestamp=Math.max(...readingGroups.map(group=>Date.parse(status.data[group]?.at)||0));
   document.getElementById('reading-time').textContent=timestamp?'Last sample '+shorttime.format(new Date(timestamp)):'';
-  document.getElementById('reading-table').replaceChildren(dataTable(type,filter.value.trim().toLowerCase()));
+  document.getElementById('reading-table').replaceChildren(dataTable(filter.value.trim().toLowerCase()));
 }
-function readingsPage(id) {
-  const [title,description]=monitorPages[id];
+function readingsPage() {
   const filter=dom('input',{id:'readings-filter',type:'search',class:'field-input lookup',
     'aria-label':'Filter readings',placeholder:'Filter readings',oninput:updateReadings});
-  main.replaceChildren(heading(title,description),card('Readings',null,
+  main.replaceChildren(heading('Live data'),dom('section',{class:'card'},
     dom('div',{class:'toolbar'},filter,dom('span',{id:'reading-time'})),dom('div',{id:'reading-table'})));
   updateReadings();
 }
@@ -700,15 +730,17 @@ function settingRow(group,field,canEdit,reload) {
   const options=field.options ?? [];
   const currentValue=String(field.value);
   const optionLabel=value=>options.find(option=>option.value===String(value))?.label ?? display(value);
-  const help=field.help||range ? dom('details',{class:'field-help',name:'setting-help'},
+  const help=field.help||range||field.fixed ? dom('details',{class:'field-help',name:'setting-help'},
     dom('summary',{'aria-label':'Info about '+field.label},'i'),
     dom('div',{class:'field-help-content'},
       field.help&&dom('p',{},field.help),
+      field.fixed&&dom('p',{},'This controller reports a fixed value with no editable range.'),
       range&&dom('p',{},options.length?'Default '+optionLabel(range.default):
         'Range '+display(range.min)+' to '+display(range.max)+' · Default '+display(range.default)),
       dom('code',{class:'field-id'},key))) : null;
   const label=dom('div',{class:'field-label'},dom('label',{for:id,class:'field-name',title:key},field.label),help);
-  if(!range||!canEdit())return dom('div',{class:'field'},label,dom('span',{id,class:'field-value'},optionLabel(field.value)));
+  if(!range||!canEdit())return dom('div',{class:'field'},label,
+    dom('div',{class:'field-value'},dom('span',{id},optionLabel(field.value)),field.fixed&&pill('Read only')));
   const onChange=()=>{apply.disabled=currentValue===input.value||!input.checkValidity();};
   const input=options.length ? dom('select',{id,class:'field-input',onchange:onChange},
     !options.some(option=>option.value===currentValue)&&dom('option',{value:currentValue,selected:true,disabled:true},'Current value ('+display(field.value)+')'),
@@ -791,14 +823,15 @@ function helpPage() {
 function renderPage() {
   refreshPageHistory = null;
   resizeChart = null;
-  const [requested,requestedSection]=window.location.hash.slice(1).split('/');
+  const [hashPage,requestedSection]=window.location.hash.slice(1).split('/');
+  const requested=hashPage==='advanced-data'?'live-data':hashPage;
   page=navigation.flatMap(([,items])=>items).some(([id])=>id===requested)?requested:'overview';
   const sections=groups[page]?.[2] ?? (page==='consumption'?consumptionPeriods:[]);
   const [section,sectionLabel]=sections.find(([id,,slug=id])=>slug===requestedSection) ?? sections[0] ?? [];
   const token=++generation;
   renderNavigation(requestedSection?sectionLabel:null);
   if (groups[page]) settingsPage(page,section,token);
-  else if (monitorPages[page]) readingsPage(page);
+  else if (page==='live-data') readingsPage();
   else if (page==='overview') overview(token);
   else if (page==='charts') charts(token);
   else if (page==='consumption') consumption(section,token);

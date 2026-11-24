@@ -41,7 +41,7 @@ var descriptions = map[string]description{
 	"hopper.content":                   {"Pellets in hopper", "Estimated fuel remaining, in kilograms. Enter the measured stock after adding pellets."},
 	"hopper.distance_sensor":           {"Hopper level sensor", "Enable the optional distance sensor used to estimate pellet fill level."},
 	"hopper.trip1":                     {"Trip 1 (kg)", ""},
-	"hopper.trip2":                     {"Trip 2 (kg)", ""},
+	"hopper.trip2":                     {"Trip 2 (kg)", "Second pellet usage trip counter."},
 	"ignition.pellets":                 {"Ignition pellet charge", "Fuel delivered at the start of the ignition sequence."},
 	"ignition.max_time":                {"Ignition timeout", "Maximum time allowed for the controller to establish a flame."},
 	"ignition.ignition_number":         {"Ignition count", "Number of ignition cycles recorded by the controller."},
