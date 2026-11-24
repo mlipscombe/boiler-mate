@@ -1,22 +1,22 @@
-FROM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS builder
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
-ENV CGO_ENABLED=0
-RUN apk add --no-cache ca-certificates
 
-COPY go.mod go.sum ./
-RUN go mod download
 COPY . .
-RUN go build -mod=readonly -trimpath -o /boiler-mate ./cmd/boiler-mate \
-    && install -d -m 0700 /boiler-mate-data
+
+ENV CGO_ENABLED=0
+RUN apk add -U --no-cache ca-certificates && update-ca-certificates
+RUN go mod download
+RUN go build -o /boiler-mate ./cmd/boiler-mate
 
 FROM scratch
-COPY --from=builder /boiler-mate /boiler-mate
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=builder --chown=10001:10001 /boiler-mate-data/ /data/
+WORKDIR /
+COPY --from=builder /boiler-mate ./
+COPY --from=builder /etc/ssl/certs/ /etc/ssl/certs
 
-EXPOSE 2112 8080
+EXPOSE 2112
 USER 10001:10001
-ENV BOILER_MATE_BIND=0.0.0.0:2112 BOILER_MATE_WEB_DATA=/data
+
+ENV BOILER_MATE_METRICS="0.0.0.0:2112"
 
 ENTRYPOINT ["/boiler-mate"]

@@ -1,7 +1,6 @@
 package mqtt
 
 import (
-	"log/slog"
 	"net"
 	"net/url"
 	"testing"
@@ -15,14 +14,13 @@ func TestClientReplaysLatestStateAfterBrokerLoss(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = listener.Close() })
+	t.Cleanup(func() { listener.Close() })
 
 	uri := &url.URL{Scheme: "mqtt", Host: listener.Addr().String()}
-	broker, err := PrepareBroker(uri)
+	client, err := NewClient(uri, "reconnect-test", "test/boiler")
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := broker.Open(t.Context(), slog.Default(), "reconnect-test", "test/boiler")
 	t.Cleanup(client.Close)
 
 	const telemetry = "test/boiler/operating_data/power_pct"
@@ -44,7 +42,7 @@ func TestClientReplaysLatestStateAfterBrokerLoss(t *testing.T) {
 	// Refuse the first connection to exercise a broker outage at startup.
 	first := acceptBrokerConnection(t, listener)
 	readBrokerConnect(t, first)
-	_ = first.Close()
+	first.Close()
 
 	initial := acceptBrokerConnection(t, listener)
 	ackBrokerConnect(t, initial)
@@ -65,7 +63,7 @@ func TestClientReplaysLatestStateAfterBrokerLoss(t *testing.T) {
 		t.Fatalf("expected a live telemetry update before the outage, got %v", packet)
 	}
 	// Drop the socket before the update is acknowledged.
-	_ = initial.Close()
+	initial.Close()
 
 	// The next socket has no broker state and cannot deliver publishes before CONNACK.
 	recovered := acceptBrokerConnection(t, listener)
@@ -105,7 +103,7 @@ func acceptBrokerConnection(t *testing.T, listener *net.TCPListener) net.Conn {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = conn.Close() })
+	t.Cleanup(func() { conn.Close() })
 	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		t.Fatal(err)
 	}

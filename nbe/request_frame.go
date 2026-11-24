@@ -21,18 +21,19 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math/big"
 	"time"
 )
 
-const encryptedBodySize = 64
+// Use shared constants from frame_helpers.go
 
 type NBERequest struct {
-	AppID        string
-	ControllerID string
-	RSAKey       *rsa.PublicKey
+	AppID        string         // client application id
+	ControllerID string         // controller id
+	RSAKey       *rsa.PublicKey // rsa key
 	Function     Function
 	SeqNo        int8
 	PinCode      string
@@ -41,66 +42,108 @@ type NBERequest struct {
 }
 
 func (frame *NBERequest) Validate() error {
-	if len(frame.AppID) == 0 || len(frame.AppID) > AppIDSize ||
-		len(frame.ControllerID) == 0 || len(frame.ControllerID) > ControllerIDSize {
-		return fmt.Errorf("invalid request identifiers")
+	if len(frame.AppID) == 0 {
+		return fmt.Errorf("AppID is empty")
 	}
-	if frame.Function < 0 || frame.Function > 99 || frame.SeqNo < 0 || frame.SeqNo > 99 {
-		return fmt.Errorf("invalid request function or sequence")
+	if len(frame.ControllerID) == 0 {
+		return fmt.Errorf("ControllerID is empty")
 	}
-	if len(frame.PinCode) > PinCodeSize || len(frame.Payload) == 0 || len(frame.Payload) > 999 {
-		return fmt.Errorf("invalid controller PIN or request payload length")
-	}
-	const bodyOverhead = 2 + FunctionSize + SeqNoSize + PinCodeSize + TimestampSize + ExtrMarkerSize + PayloadLenSize
-	if frame.RSAKey != nil && len(frame.Payload) > encryptedBodySize-bodyOverhead {
-		return fmt.Errorf("request payload exceeds the NBE encrypted frame limit")
+	if len(frame.Payload) == 0 {
+		return fmt.Errorf(" Payload is empty")
 	}
 	return nil
 }
 
 func (frame *NBERequest) Pack(writer io.Writer) error {
-	if err := frame.Validate(); err != nil {
+	var err error
+	err = frame.Validate()
+	if err != nil {
 		return err
 	}
-	timestamp := frame.Timestamp
-	if timestamp.IsZero() {
-		timestamp = time.Now()
+	err = binary.Write(writer, binary.BigEndian, []byte(fmt.Sprintf("%12s", frame.AppID)))
+	if err != nil {
+		return err
 	}
-	if seconds := timestamp.Unix(); seconds < 0 || seconds > 9999999999 {
-		return fmt.Errorf("invalid request timestamp")
+	err = binary.Write(writer, binary.BigEndian, []byte(fmt.Sprintf("%06s", frame.ControllerID)))
+	if err != nil {
+		return err
 	}
-	pin := frame.PinCode
-	if pin == "" {
-		pin = "0000000000"
+	buf := new(bytes.Buffer)
+	err = buf.WriteByte(0x02)
+	if err != nil {
+		return err
 	}
-
-	var packet bytes.Buffer
-	fmt.Fprintf(&packet, "%12s%6s", frame.AppID, frame.ControllerID)
-
-	body := fmt.Appendf(nil, "%c%02d%02d%10s%010dextr%03d",
-		StartMarker, frame.Function, frame.SeqNo, pin, timestamp.Unix(), len(frame.Payload))
-	body = append(body, frame.Payload...)
-	body = append(body, EndMarker)
-	if key := frame.RSAKey; key != nil {
-		if key.N == nil || key.N.Sign() <= 0 || key.E < 3 || key.E%2 == 0 {
-			return fmt.Errorf("invalid controller RSA key")
-		}
-		var padded [encryptedBodySize]byte
-		copy(padded[:], body)
-		_, _ = rand.Read(padded[len(body):])
-		plain := new(big.Int).SetBytes(padded[:])
-		if plain.Cmp(key.N) >= 0 {
-			return fmt.Errorf("controller RSA key is too small for the NBE frame")
-		}
-		// NBE expects the raw RSA operation on its own padded frame.
-		packet.WriteByte('*')
-		ciphertext := plain.Exp(plain, big.NewInt(int64(key.E)), key.N)
-		packet.Write(ciphertext.FillBytes(make([]byte, key.Size())))
+	_, err = buf.WriteString(fmt.Sprintf("%02d", frame.Function))
+	if err != nil {
+		return err
+	}
+	_, err = buf.WriteString(fmt.Sprintf("%02d", frame.SeqNo))
+	if err != nil {
+		return err
+	}
+	if frame.PinCode != "" {
+		_, err = buf.WriteString(fmt.Sprintf("%10s", frame.PinCode))
 	} else {
-		packet.WriteByte(' ')
-		packet.Write(body)
+		_, err = buf.WriteString("0000000000")
 	}
-	_, err := packet.WriteTo(writer)
+	if err != nil {
+		return err
+	}
+	if frame.Timestamp.IsZero() {
+		frame.Timestamp = time.Now()
+	}
+	_, err = buf.WriteString(fmt.Sprintf("%010d", frame.Timestamp.Unix()))
+	if err != nil {
+		return err
+	}
+	_, err = buf.WriteString("extr")
+	if err != nil {
+		return err
+	}
+	_, err = buf.WriteString(fmt.Sprintf("%03d", len(frame.Payload)))
+	if err != nil {
+		return err
+	}
+	_, err = buf.Write(frame.Payload)
+	if err != nil {
+		return err
+	}
+	err = buf.WriteByte(0x04)
+	if err != nil {
+		return err
+	}
+
+	if frame.RSAKey != nil {
+		padLen := 64 - buf.Len()
+		padBytes := make([]byte, padLen)
+		_, err = rand.Read(padBytes)
+		if err != nil {
+			return err
+		}
+
+		err = binary.Write(writer, binary.BigEndian, []byte("*"))
+		if err != nil {
+			return err
+		}
+		err = binary.Write(buf, binary.BigEndian, padBytes)
+		if err != nil {
+			return err
+		}
+		c := new(big.Int).SetBytes(buf.Bytes())
+		err = binary.Write(writer, binary.BigEndian, c.Exp(c, big.NewInt(int64(frame.RSAKey.E)), frame.RSAKey.N).Bytes())
+		if err != nil {
+			return err
+		}
+	} else {
+		err = binary.Write(writer, binary.BigEndian, []byte(" "))
+		if err != nil {
+			return err
+		}
+		_, err = buf.WriteTo(writer)
+		if err != nil {
+			return err
+		}
+	}
 	return err
 }
 
@@ -114,11 +157,8 @@ func (frame *NBERequest) Unpack(reader io.Reader) error {
 		return err
 	}
 
-	// Encrypted fixture requests are decrypted before unpacking.
-	if err := validateMarker(reader, ' ', "encryption marker"); err != nil {
-		return err
-	}
-	if err := validateMarker(reader, StartMarker, "start marker"); err != nil {
+	// Skip encryption byte and validate start marker
+	if err := readAndValidateMarker(reader, StartMarker, "start marker"); err != nil {
 		return err
 	}
 
@@ -157,5 +197,12 @@ func (frame *NBERequest) Unpack(reader io.Reader) error {
 		return err
 	}
 
-	return validateMarker(reader, EndMarker, "end marker")
+	// Read and ignore end marker
+	if _, err = readBytes(reader, 1, "end marker"); err != nil {
+		return err
+	}
+
+	return nil
 }
+
+// Helper functions are now in frame_helpers.go

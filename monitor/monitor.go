@@ -18,179 +18,210 @@
 package monitor
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"log/slog"
-	"maps"
 	"reflect"
-	"sync"
 	"time"
 
+	cmp "github.com/google/go-cmp/cmp"
+	"github.com/mlipscombe/boiler-mate/mqtt"
 	"github.com/mlipscombe/boiler-mate/nbe"
 	"github.com/prometheus/client_golang/prometheus"
+	log "github.com/sirupsen/logrus"
 )
 
-type reader interface {
-	Get(context.Context, nbe.Function, string) (*nbe.NBEResponse, error)
+// StartSettingsMonitor polls settings data and publishes changes
+// If ready channel is provided, it will be signaled when first data is published
+func StartSettingsMonitor(boiler *nbe.NBE, mqttClient *mqtt.Client, category string) chan bool {
+	return StartSettingsMonitorWithReady(boiler, mqttClient, category, true)
 }
 
-type publisher interface {
-	PublishMany(topic string, values map[string]any) error
-}
-
-type poll struct {
-	function nbe.Function
-	path     string
-	topic    string
-	interval time.Duration
-}
-
-// Observer receives successful snapshots, including values that have not changed.
-type Observer func(topic string, values map[string]any)
-
-// Run polls the controller until ctx is cancelled and waits for all pollers to stop.
-func Run(ctx context.Context, logger *slog.Logger, boiler reader, mqtt publisher, registry prometheus.Registerer, serial string, observe Observer, ready func()) {
-	polls := []poll{
-		{nbe.GetOperatingDataFunction, "*", "operating_data", 5 * time.Second},
-		{nbe.GetAdvancedDataFunction, "*", "advanced_data", 5 * time.Second},
-	}
-	for _, category := range nbe.Settings {
-		polls = append(polls, poll{nbe.GetSetupFunction, category + ".*", category, 10 * time.Second})
+// StartSettingsMonitorWithReady polls settings data with optional ready notification
+func StartSettingsMonitorWithReady(boiler *nbe.NBE, mqttClient *mqtt.Client, category string, notifyReady bool) chan bool {
+	cache := make(map[string]interface{})
+	gauges := make(map[string]*prometheus.GaugeVec)
+	var ready chan bool
+	if notifyReady {
+		ready = make(chan bool, 1)
 	}
 
-	gauges := &metricSet{registry: registry, serial: serial, gauges: make(map[string]metric)}
-	var workers sync.WaitGroup
-	for _, task := range polls {
-		workers.Go(func() {
-			runPoll(ctx, logger, boiler, mqtt, gauges, task, observe, ready)
-		})
-	}
-	workers.Wait()
-}
+	firstPublish := true
 
-func runPoll(ctx context.Context, logger *slog.Logger, boiler reader, mqtt publisher, gauges *metricSet, task poll, observe Observer, ready func()) {
-	cache := make(map[string]any)
-	ticker := time.NewTicker(task.interval)
-	defer ticker.Stop()
-	for ctx.Err() == nil {
-		response, err := boiler.Get(ctx, task.function, task.path)
-		if err != nil {
-			if ctx.Err() == nil {
-				logger.Debug("Controller poll failed", "topic", task.topic, "error", err)
-			}
-		} else {
-			values := response.Payload
-			if task.topic == "operating_data" {
-				values = withOperatingState(values)
-			}
-			if observe != nil {
-				observe(task.topic, values)
-			}
-			updates := make(map[string]any)
-			for key, value := range values {
-				gauges.set(logger, task.topic, key, value)
-				if previous, exists := cache[key]; !exists || !equalValue(previous, value) {
-					updates[key] = value
+	go func() {
+		for {
+			_, err := boiler.GetAsync(nbe.GetSetupFunction, fmt.Sprintf("%s.*", category), func(response *nbe.NBEResponse) {
+				changeSet := make(map[string]interface{})
+				for key, value := range response.Payload {
+					// Register prometheus gauge if numeric and not exists
+					if gauges[key] == nil && isNumeric(value) {
+						gauges[key] = prometheus.NewGaugeVec(
+							prometheus.GaugeOpts{
+								Namespace: "boiler_mate",
+								Subsystem: category,
+								Name:      key,
+							},
+							[]string{"serial"},
+						)
+						if err := prometheus.Register(gauges[key]); err != nil {
+							log.Debugf("Failed to register gauge %s.%s: %v", category, key, err)
+						}
+					}
+
+					// Publish if changed
+					if !cmp.Equal(cache[key], value) {
+						changeSet[key] = value
+						cache[key] = value
+						updateGauge(gauges[key], boiler.Serial, value)
+					}
 				}
-			}
-			if err := mqtt.PublishMany(task.topic, updates); err != nil {
-				logger.Warn("Could not queue MQTT update", "topic", task.topic, "error", err)
-			} else {
-				maps.Copy(cache, updates)
-				if task.topic == "operating_data" && len(values) > 0 && ready != nil {
-					ready()
-					ready = nil
+				if err := mqttClient.PublishMany(category, changeSet); err != nil {
+					log.Debugf("Failed to publish %s changes: %v", category, err)
 				}
+
+				// Signal ready after first successful publish
+				if firstPublish && ready != nil {
+					select {
+					case ready <- true:
+					default:
+					}
+					firstPublish = false
+				}
+			})
+			if err != nil {
+				log.Debugf("Failed to get %s settings: %v", category, err)
 			}
+			time.Sleep(10 * time.Second)
 		}
+	}()
 
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
+	return ready
+}
+
+// StartOperatingDataMonitor polls operating data and publishes changes
+// Returns a channel that signals when first data is published
+func StartOperatingDataMonitor(boiler *nbe.NBE, mqttClient *mqtt.Client) chan bool {
+	cache := make(map[string]interface{})
+	gauges := make(map[string]*prometheus.GaugeVec)
+	ready := make(chan bool, 1)
+	firstPublish := true
+
+	go func() {
+		for {
+			_, err := boiler.GetAsync(nbe.GetOperatingDataFunction, "*", func(response *nbe.NBEResponse) {
+				changeSet := make(map[string]interface{})
+				for key, value := range response.Payload {
+					// Register prometheus gauge if numeric and not exists
+					if gauges[key] == nil && isNumeric(value) {
+						gauges[key] = prometheus.NewGaugeVec(
+							prometheus.GaugeOpts{
+								Namespace: "boiler_mate",
+								Subsystem: "operating_data",
+								Name:      key,
+							},
+							[]string{"serial"},
+						)
+						prometheus.MustRegister(gauges[key])
+					}
+
+					// Publish if changed
+					if !cmp.Equal(cache[key], value) {
+						changeSet[key] = value
+						cache[key] = value
+						updateGauge(gauges[key], boiler.Serial, value)
+
+						// Add state_text and state_on for state field
+						if key == "state" {
+							if curState, ok := value.(int64); ok {
+								changeSet["state_text"] = nbe.PowerStates[curState]
+								if curState != 14 {
+									changeSet["state_on"] = "ON"
+								} else {
+									changeSet["state_on"] = "OFF"
+								}
+							}
+						}
+					}
+				}
+				if err := mqttClient.PublishMany("operating_data", changeSet); err != nil {
+					log.Debugf("Failed to publish operating_data: %v", err)
+				}
+
+				// Signal ready after first successful publish
+				if firstPublish {
+					select {
+					case ready <- true:
+					default:
+					}
+					firstPublish = false
+				}
+			})
+			if err != nil {
+				log.Debugf("Failed to get operating data: %v", err)
+			}
+			time.Sleep(5 * time.Second)
 		}
-	}
+	}()
+
+	return ready
 }
 
-func equalValue(left, right any) bool {
-	if left, ok := left.(nbe.RoundedFloat); ok {
-		right, ok := right.(nbe.RoundedFloat)
-		return ok && left.Equal(right)
-	}
-	return reflect.DeepEqual(left, right)
+// StartAdvancedDataMonitor polls advanced data and publishes changes
+func StartAdvancedDataMonitor(boiler *nbe.NBE, mqttClient *mqtt.Client) {
+	cache := make(map[string]interface{})
+	gauges := make(map[string]*prometheus.GaugeVec)
+
+	go func() {
+		for {
+			_, err := boiler.GetAsync(nbe.GetAdvancedDataFunction, "*", func(response *nbe.NBEResponse) {
+				changeSet := make(map[string]interface{})
+				for key, value := range response.Payload {
+					// Register prometheus gauge if numeric and not exists
+					if gauges[key] == nil && isNumeric(value) {
+						gauges[key] = prometheus.NewGaugeVec(
+							prometheus.GaugeOpts{
+								Namespace: "boiler_mate",
+								Subsystem: "operating_data",
+								Name:      key,
+							},
+							[]string{"serial"},
+						)
+						prometheus.MustRegister(gauges[key])
+					}
+
+					// Publish if changed
+					if !cmp.Equal(cache[key], value) {
+						changeSet[key] = value
+						cache[key] = value
+						updateGauge(gauges[key], boiler.Serial, value)
+					}
+				}
+				if err := mqttClient.PublishMany("advanced_data", changeSet); err != nil {
+					log.Debugf("Failed to publish advanced_data: %v", err)
+				}
+			})
+			if err != nil {
+				log.Debugf("Failed to get advanced data: %v", err)
+			}
+			time.Sleep(5 * time.Second)
+		}
+	}()
 }
 
-func withOperatingState(values map[string]any) map[string]any {
-	state, ok := values["state"].(int64)
-	if !ok {
-		return values
+func isNumeric(value interface{}) bool {
+	if value == nil {
+		return false
 	}
-	values = maps.Clone(values)
-	message := fmt.Sprintf("Unknown (%d)", state)
-	if state >= 0 && state < int64(len(nbe.PowerStates)) {
-		message = nbe.PowerStates[state]
-	}
-	values["state_text"] = message
-	values["state_on"] = "ON"
-	if state == 14 {
-		values["state_on"] = "OFF"
-	}
-	return values
+	dataType := reflect.TypeOf(value).Kind()
+	return dataType == reflect.Float64 || dataType == reflect.Int64
 }
 
-type metricSet struct {
-	mu       sync.Mutex
-	registry prometheus.Registerer
-	serial   string
-	gauges   map[string]metric
-}
-
-type metric struct {
-	gauge  *prometheus.GaugeVec
-	source string
-}
-
-func (metrics *metricSet) set(logger *slog.Logger, source, key string, value any) {
-	var number float64
-	switch value := value.(type) {
-	case int64:
-		number = float64(value)
-	case nbe.RoundedFloat:
-		number = float64(value)
-	default:
+func updateGauge(gauge *prometheus.GaugeVec, serial string, value interface{}) {
+	if gauge == nil {
 		return
 	}
-
-	// Advanced data has historically used the operating_data metric namespace.
-	subsystem := source
-	if subsystem == "advanced_data" {
-		subsystem = "operating_data"
+	switch v := value.(type) {
+	case nbe.RoundedFloat:
+		gauge.WithLabelValues(serial).Set(float64(v))
+	case int64:
+		gauge.WithLabelValues(serial).Set(float64(v))
 	}
-	metrics.mu.Lock()
-	defer metrics.mu.Unlock()
-	name := subsystem + "_" + key
-	m, ok := metrics.gauges[name]
-	if !ok {
-		m = metric{
-			gauge: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-				Namespace: "boiler_mate", Subsystem: subsystem, Name: key,
-			}, []string{"serial"}),
-			source: source,
-		}
-		if err := metrics.registry.Register(m.gauge); err != nil {
-			var registered prometheus.AlreadyRegisteredError
-			if errors.As(err, &registered) {
-				m.gauge, _ = registered.ExistingCollector.(*prometheus.GaugeVec)
-			} else {
-				logger.Debug("Could not register metric", "metric", name, "error", err)
-				m.gauge = nil
-			}
-		}
-	}
-	if m.gauge != nil && (m.source == source || source == "operating_data") {
-		m.gauge.WithLabelValues(metrics.serial).Set(number)
-		m.source = source
-	}
-	metrics.gauges[name] = m
 }

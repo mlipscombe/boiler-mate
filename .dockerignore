@@ -1,8 +1,0 @@
-.git
-.github
-boiler-mate
-boiler-mate-data
-*.out
-coverage.html
-.test-cache
-node_modules
