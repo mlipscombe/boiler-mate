@@ -81,10 +81,14 @@
   .metric-sub { @apply mt-1 text-xs text-muted; }
 
   .overview-system { @apply overflow-hidden rounded-lg border border-border bg-surface; }
-  .system-main { @apply grid grid-cols-2 items-end gap-4 px-4 pt-4 pb-5 sm:px-5; }
+  .system-main { @apply grid grid-cols-2 items-start gap-4 px-4 pt-4 pb-5 sm:px-5; }
   .system-main h2 { @apply mt-1.5 mb-0.5 text-3xl leading-tight font-semibold tracking-tight; }
-  .system-main button { @apply col-span-2 justify-self-start sm:col-span-1 md:col-span-2 lg:col-span-1 lg:justify-self-end; }
-  @media (min-width: 40rem) and (max-width: 47.99rem), (min-width: 64rem) {
+  .power-controls { @apply col-span-2 grid gap-1.5 border-t border-border pt-3 lg:col-span-1 lg:border-t-0 lg:border-l lg:pl-4 lg:pt-0; }
+  .power-controls h3 { @apply text-sm font-semibold; }
+  .power-buttons { @apply flex flex-wrap items-center gap-2; }
+  .power-controls p { @apply text-xs leading-5 text-muted; }
+  .page-actions { @apply mb-0; }
+  @media (min-width: 64rem) {
     .system-main { grid-template-columns: minmax(0,1fr) minmax(0,1fr) auto; }
   }
   .operating-mode { @apply flex items-center gap-1.5 text-sm font-medium text-muted; }
@@ -140,16 +144,31 @@
   .timer th, .timer td { @apply px-1.5 py-1.5 whitespace-nowrap; }
   .timer select { @apply w-full min-w-[4.7rem] text-xs; }
   .fields { @apply grid; }
-  .field { @apply grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 border-t border-border py-3 sm:grid-cols-[minmax(0,1fr)_minmax(7rem,11rem)_auto] sm:gap-3; }
+  .field {
+    @apply grid grid-cols-[minmax(0,1fr)_minmax(3.75rem,6.25rem)_auto] items-center gap-2 border-t border-border py-1.5;
+    @apply sm:grid-cols-[minmax(0,1fr)_minmax(8rem,11rem)_auto] sm:gap-3;
+  }
   .field:first-child { @apply border-t-0; }
-  .field-label { @apply col-span-full sm:col-span-1; }
-  .field-name { @apply text-sm font-semibold; }
+  .field-label { @apply relative flex min-w-0 items-center gap-2; }
+  .field-name { @apply min-w-0 text-sm font-medium; }
   .field-id { @apply block font-mono text-xs leading-5 break-all text-muted; }
-  .field-input { @apply min-w-0 w-full; }
-  .field-value { @apply py-1 text-sm break-all; }
+  .field-input { @apply min-h-8 min-w-0 w-full py-1; }
+  .field-value { @apply col-span-2 text-right text-sm break-all; }
+  .field-action { @apply min-h-8 px-2 py-1; }
   details { @apply text-sm leading-relaxed text-muted; }
   details summary { @apply cursor-pointer font-medium text-accent; }
   details p { @apply my-1.5; }
+  .field-help { @apply shrink-0; }
+  .field-help summary {
+    @apply grid size-5 list-none place-items-center rounded-full border border-border bg-surface text-xs font-semibold leading-none text-muted;
+    @apply hover:border-blue-200 hover:bg-accent-soft hover:text-accent;
+  }
+  .field-help summary::-webkit-details-marker { display: none; }
+  .field-help-content {
+    @apply absolute top-[calc(100%+.35rem)] left-0 z-20 w-[min(19rem,calc(100vw-3rem))] rounded-md border border-border bg-surface px-3 py-2 text-sm shadow-lg;
+  }
+  .field-help-content p:first-child { @apply mt-0; }
+  .field-help-content code { @apply text-xs; }
   .signal-chooser { @apply grid max-h-56 grid-cols-1 gap-2 overflow-auto py-2 sm:grid-cols-2 xl:grid-cols-3; }
   .signal-chooser label { @apply flex cursor-pointer items-start gap-1.5 text-sm; }
   .signal-chooser input { @apply mt-1 accent-accent; }

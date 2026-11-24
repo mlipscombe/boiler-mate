@@ -49,26 +49,6 @@ var descriptions = map[string]description{
 	"misc.expansion_module":            {"Expansion module", "Controller setting for the optional expansion module. Match the installed equipment."},
 }
 
-var groupHelp = map[string]string{
-	"boiler":     "Boiler temperature, external demand, and heating schedule.",
-	"hot_water":  "Domestic hot-water tank temperature, output, and weekly schedule.",
-	"regulation": "Burner output limits and response to heating demand.",
-	"weather":    "Outdoor compensation and heating curve for the first heating circuit.",
-	"weather2":   "Outdoor compensation and heating curve for the second heating circuit.",
-	"oxygen":     "Lambda probe and combustion feedback settings.",
-	"cleaning":   "Fan purge and compressor cleaning cycles.",
-	"hopper":     "Fuel measurement and low-hopper thresholds.",
-	"fan":        "Combustion and exhaust air settings.",
-	"auger":      "Pellet feed, external auger, and output calibration.",
-	"ignition":   "Ignition sequence, flame detection, and counter settings.",
-	"pump":       "Heating circulation pump and flow configuration.",
-	"sun":        "Solar thermal circuit, pump, and excess heat settings.",
-	"vacuum":     "Optional vacuum pellet transport.",
-	"misc":       "Controller clock, display units, sensors, and expansion hardware.",
-	"alarm":      "Controller fault thresholds and alarm output.",
-	"manual":     "Service controls for connected outputs. Use the controller manufacturer's service procedures.",
-}
-
 func settingDescription(group, key string) (string, string) {
 	if d, ok := descriptions[group+"."+key]; ok {
 		return d.Label, d.Help
@@ -78,5 +58,5 @@ func settingDescription(group, key string) (string, string) {
 	if isTimer(group, key) {
 		return title, "Controller schedule for this day, divided into 12 two-hour periods."
 	}
-	return title, groupHelp[group] + " Check the controller manual for the behavior of this setting on your firmware."
+	return title, ""
 }

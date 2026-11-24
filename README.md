@@ -37,6 +37,8 @@ Metrics and process probes are served at `/metrics`, `/healthz`, and `/liveness`
 
 ## Dashboard
 
+The dashboard test branch publishes `ghcr.io/mlipscombe/boiler-mate:dashboard-test` alongside an immutable commit tag for each build. Use the test image in the boiler’s deployment when evaluating the dashboard.
+
 ```sh
 ./boiler-mate --web-bind 127.0.0.1:8080 --web-data ./boiler-mate-data
 ```

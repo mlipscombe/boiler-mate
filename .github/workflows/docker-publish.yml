@@ -2,13 +2,17 @@ name: Build & Publish
 
 on:
   push:
-    branches: [main]
+    branches: [main, "codex/boiler-mate-dashboard"]
     tags: ["*"]
   pull_request:
     branches: [main]
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -91,11 +95,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/boiler-mate-dashboard' || startsWith(github.ref, 'refs/tags/'))
     steps:
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
@@ -117,7 +118,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=ref,event=branch
+            type=ref,event=branch,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=dashboard-test,enable=${{ github.ref == 'refs/heads/codex/boiler-mate-dashboard' }}
             type=ref,event=tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}

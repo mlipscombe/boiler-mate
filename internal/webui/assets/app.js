@@ -163,15 +163,18 @@ function updateOverview() {
   const live = document.getElementById('overview-live');
   if (!live) return;
   const op = snapshot('operating_data');
-  const power = op.state_on === 'OFF' ? 'start' : 'stop';
-  const action = power==='start'?'Start boiler':'Stop boiler';
-  const command = async ()=>{
-    if (!await confirmChange(action+'?', 'This sends a '+power+' command to the pellet boiler.', action)) return;
-    try { await api('power',{method:'POST',body:JSON.stringify({action:power})}); toast('Controller acknowledged the command.'); await refresh(); }
+  const blocked = !status.online ? 'Waiting for a live controller reading.'
+    : !status.control ? 'Read only. A controller PIN enables actions.'
+    : !['ON','OFF'].includes(op.state_on) ? 'Waiting for the boiler state.' : '';
+  const command = action => async ()=>{
+    const label = action==='start'?'Start boiler':'Stop boiler';
+    const prompt = action==='start'?'Send a start request to the pellet boiler.':'Send a stop request to the pellet boiler.';
+    if (!await confirmChange(label+'?',prompt,label)) return;
+    try { await api('power',{method:'POST',body:JSON.stringify({action})}); toast(label+' request acknowledged.'); await refresh(); }
     catch(error) { toast(error.message); }
   };
   const last = status.data.operating_data?.at;
-  const restoreFocus = live.querySelector('button') === document.activeElement;
+  const focusedAction = live.contains(document.activeElement) ? document.activeElement.dataset.action : null;
   const remaining = signal('operating_data.content');
   const output = signal('operating_data.power_kw');
   const water = signal('operating_data.dhw_temp');
@@ -190,7 +193,12 @@ function updateOverview() {
       dom('div',{class:'system-temperature'},dom('span',{},'Boiler temperature'),
         dom('strong',{},display(signal('operating_data.boiler_temp')),dom('small',{},'°C')),
         dom('span',{},'Target '+withUnit(signal('operating_data.boiler_ref'),'°C'))),
-      btn(action,command,power==='stop'?'danger':'secondary',{disabled:!status.control||!status.online||!op.state_on})),
+      dom('div',{class:'power-controls','aria-label':'Boiler controls'},
+        dom('h3',{},'Boiler controls'),
+        dom('div',{class:'power-buttons'},
+          btn('Start boiler',command('start'),'primary',{'data-action':'start',disabled:Boolean(blocked)||op.state_on!=='OFF'}),
+          btn('Stop boiler',command('stop'),'danger',{'data-action':'stop',disabled:Boolean(blocked)||op.state_on!=='ON'})),
+        blocked&&dom('p',{},blocked))),
     dom('div',{class:'system-line'},readings.map(([label,value,detail,link]) =>
       dom('a',{class:'system-reading',href:link},dom('span',{},label),dom('strong',{},value),dom('small',{},detail))))));
   const custom = document.getElementById('overview-custom');
@@ -199,7 +207,7 @@ function updateOverview() {
     return dom('div',{class:'compact-reading'},dom('span',{},titleSignal(key)),
       dom('strong',{},withUnit(value,unitSignal(key))));
   }));
-  if (restoreFocus) live.querySelector('button').focus({preventScroll:true});
+  if (focusedAction) live.querySelector('[data-action=+focusedAction+]').focus({preventScroll:true});
 }
 function withUnit(value,unit) {
   return display(value)+(value==null||!unit?'':' '+unit);
@@ -534,18 +542,18 @@ function settingsPage(id,token) {
       if(index===sequence)controls.replaceChildren(empty(error.message),btn('Try again',()=>load(group)));
     }
   };
-  const diagnostics=id==='system' ? [
-    card('Live & advanced diagnostics','Includes regulation, combustion, and connected outputs.',
-      dom('details',{},dom('summary',{},'Operating data'),dataTable('operating_data')),
-      dom('details',{},dom('summary',{},'Advanced data'),dataTable('advanced_data'))),
-    card('Alarm reset','Use this after resolving the alarm on the boiler.',
-      btn('Reset alarm',async()=>{
-        if(!await confirmChange('Reset controller alarm?','Resolve the cause of the alarm before resetting it.','Reset alarm'))return;
-        try {await api('alarm/reset',{method:'POST'});toast('Controller acknowledged the alarm reset.');}
-        catch(error){toast(error.message);}
-      },'danger',{disabled:!editEnabled()})),
-  ] : [];
-  main.replaceChildren(heading(title,description,btn('Refresh',async()=>{await refresh();renderPage();})),
+  const diagnostics=id==='system' ? card('Live & advanced diagnostics','Includes regulation, combustion, and connected outputs.',
+    dom('details',{},dom('summary',{},'Operating data'),dataTable('operating_data')),
+    dom('details',{},dom('summary',{},'Advanced data'),dataTable('advanced_data'))) : null;
+  const actions=dom('div',{class:'toolbar page-actions'},
+    id==='system'&&btn('Reset alarm',async()=>{
+      if(!await confirmChange('Reset controller alarm?','Resolve the cause of the alarm before resetting it.','Reset alarm'))return;
+      try {await api('alarm/reset',{method:'POST'});toast('Controller acknowledged the alarm reset.');}
+      catch(error){toast(error.message);}
+    },'danger',{disabled:!editEnabled()}),
+    id==='boiler'&&dom('a',{class:'primary',href:'#overview'},'Boiler controls'),
+    btn('Refresh readings',async()=>{await refresh();renderPage();}));
+  main.replaceChildren(heading(title,description,actions),
     dom('div',{class:'stack'},
       dom('div',{class:'grid metrics'},metrics[id].map(key=>metric(key))),
       card('Controller settings',status.control?'Changes are sent to the controller after confirmation.':'You can view settings in read-only mode.',tablist,controls),
@@ -556,23 +564,28 @@ function settingsPage(id,token) {
 function settingRow(group,field,canEdit,reload) {
   const range=field.range;
   const id='field-'+group+'-'+field.key;
-  const detail=dom('details',{},dom('summary',{},'Help'),dom('p',{},field.help),
-    range&&dom('p',{},'Range '+display(range.min)+' to '+display(range.max)+' · Default '+display(range.default)));
-  const label=dom('div',{class:'field-label'},dom('label',{for:id,class:'field-name'},field.label),
-    dom('small',{class:'field-id'},group+'.'+field.key),detail);
+  const key=group+'.'+field.key;
+  const help=field.help||range ? dom('details',{class:'field-help',name:'setting-help'},
+    dom('summary',{'aria-label':'Info about '+field.label},'i'),
+    dom('div',{class:'field-help-content'},
+      field.help&&dom('p',{},field.help),
+      range&&dom('p',{},'Range '+display(range.min)+' to '+display(range.max)+' · Default '+display(range.default)),
+      dom('code',{class:'field-id'},key))) : null;
+  const label=dom('div',{class:'field-label'},dom('label',{for:id,class:'field-name',title:key},field.label),help);
   if(!range||!canEdit())return dom('div',{class:'field'},label,dom('span',{id,class:'field-value'},display(field.value)));
   const isToggle=range.min===0&&range.max===1&&range.decimals===0;
   const onChange=()=>{apply.disabled=String(field.value)===input.value||!input.checkValidity();};
   const input=isToggle ? dom('select',{id,class:'field-input',onchange:onChange},
     dom('option',{value:'0',selected:field.value===0},'0'),dom('option',{value:'1',selected:field.value===1},'1')):
     dom('input',{id,class:'field-input',type:'number',value:field.value,min:range.min,max:range.max,step:1/(10**range.decimals),oninput:onChange,required:true});
-  const apply=btn('Apply',async()=>{
+  const action=key==='auger.forced_run'?'Run auger':'Apply';
+  const apply=btn(action,async()=>{
     const value=input.value;
-    if(!input.reportValidity()||!await confirmChange('Apply '+field.label+'?',display(field.value)+' → '+value,'Apply'))return;
+    if(!input.reportValidity()||!await confirmChange(action==='Run auger'?'Run external auger?':'Apply '+field.label+'?',display(field.value)+' → '+value,action))return;
     apply.disabled=true;
     try {await writeSetting(group,field.key,field.value,value);toast('Controller acknowledged the change.');reload();}
     catch(error){toast(error.message);onChange();}
-  },'secondary',{disabled:true});
+  },'secondary field-action',{disabled:true});
   return dom('div',{class:'field'},label,input,apply);
 }
 function writeSetting(group,key,current,value) {

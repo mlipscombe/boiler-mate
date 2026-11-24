@@ -31,7 +31,7 @@ type field struct {
 	Key   string        `json:"key"`
 	Value any           `json:"value"`
 	Label string        `json:"label"`
-	Help  string        `json:"help"`
+	Help  string        `json:"help,omitempty"`
 	Range *settingRange `json:"range,omitempty"`
 	Timer bool          `json:"timer,omitempty"`
 }

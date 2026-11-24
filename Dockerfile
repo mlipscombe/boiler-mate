@@ -1,13 +1,15 @@
-FROM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS builder
 
 WORKDIR /app
+ARG TARGETOS
+ARG TARGETARCH
 ENV CGO_ENABLED=0
 RUN apk add --no-cache ca-certificates
 
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go build -mod=readonly -trimpath -o /boiler-mate ./cmd/boiler-mate \
+RUN GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -mod=readonly -trimpath -o /boiler-mate ./cmd/boiler-mate \
     && install -d -m 0700 /boiler-mate-data
 
 FROM scratch
