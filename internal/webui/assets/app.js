@@ -415,7 +415,7 @@ function overview(token) {
     try {
       const items = await api('events');
       if(token!==generation||request!==recentRequest)return;
-      recent.replaceChildren(eventList(items.slice(0,4)));
+      recent.replaceChildren(eventList(items.slice(0,5)));
       recentLoaded = true;
     } catch(error) {
       if(!recentLoaded&&token===generation&&request===recentRequest)recent.replaceChildren(empty(error.message));
