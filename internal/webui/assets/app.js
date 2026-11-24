@@ -378,8 +378,21 @@ function overview(token) {
   };
   refreshPageHistory = refreshChart;
   refreshChart(true);
-  api('events').then(items=>{if(token===generation) recent.replaceChildren(eventList(items.slice(0,4)));})
-    .catch(error=>recent.replaceChildren(empty(error.message)));
+  let recentRequest = 0;
+  let recentLoaded = false;
+  const refreshRecent = async()=>{
+    const request = ++recentRequest;
+    try {
+      const items = await api('events');
+      if(token!==generation||request!==recentRequest)return;
+      recent.replaceChildren(eventList(items.slice(0,4)));
+      recentLoaded = true;
+    } catch(error) {
+      if(!recentLoaded&&token===generation&&request===recentRequest)recent.replaceChildren(empty(error.message));
+    }
+  };
+  refreshPageEvents = refreshRecent;
+  refreshRecent();
 }
 
 function liveReadingKeys() {
