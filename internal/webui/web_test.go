@@ -1,10 +1,12 @@
 package webui
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -130,6 +132,53 @@ func TestVendorOptionsRespectControllerRange(t *testing.T) {
 	if options := settingOptionKind("weather.input_reference", nil).options(nil, true, nil); len(options) != 21 || options[0].Label != "www" || options[20].Value != "20" {
 		t.Fatalf("incorrect expansion-board input options: %+v", options)
 	}
+}
+
+func TestStatusStream(t *testing.T) {
+	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ui.Close() })
+	ui.Observe(t.Context(), "misc", map[string]any{"clock_hour": int64(12)})
+	ui.Observe(t.Context(), "operating_data", map[string]any{"boiler_temp": int64(42)})
+	server := httptest.NewUnstartedServer(ui.Handler())
+	server.Config.WriteTimeout = 200 * time.Millisecond
+	server.Start()
+	defer server.Close()
+	client := server.Client()
+	client.Timeout = 3 * time.Second
+	response, err := client.Get(server.URL + "/api/status/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("unexpected stream response: %s %v", response.Status, response.Header)
+	}
+	reader := bufio.NewReader(response.Body)
+	readEvent := func(want float64) {
+		t.Helper()
+		line, err := reader.ReadString('\n')
+		value, ok := strings.CutPrefix(strings.TrimSpace(line), "data: ")
+		if err != nil || !ok {
+			t.Fatalf("could not read stream event: %q %v", line, err)
+		}
+		var status dashboardStatus
+		if err := json.Unmarshal([]byte(value), &status); err != nil {
+			t.Fatal(err)
+		}
+		if got := status.Data["operating_data"].Values["boiler_temp"]; got != want || !status.Online || status.Control || len(status.Data) != 1 {
+			t.Fatalf("unexpected dashboard status: %+v", status)
+		}
+		if separator, err := reader.ReadString('\n'); separator != "\n" || err != nil {
+			t.Fatalf("invalid event separator %q: %v", separator, err)
+		}
+	}
+	readEvent(42)
+	time.Sleep(250 * time.Millisecond)
+	ui.Observe(t.Context(), "operating_data", map[string]any{"boiler_temp": int64(43)})
+	readEvent(43)
 }
 
 func TestTimerRange(t *testing.T) {

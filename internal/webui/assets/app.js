@@ -85,6 +85,11 @@ const main = document.querySelector('main');
 let status = {data:{},online:false,control:false};
 let page = '';
 let generation = 0;
+let statusRequest = 0;
+let statusSource = null;
+let statusPoll = 0;
+let refreshPageHistory = null;
+let resizeChart = null;
 let toastTimer = 0;
 let noticeReady = false;
 let lastDesktopNotice = 0;
@@ -193,16 +198,66 @@ function refreshChrome() {
   access.textContent = status.control ? 'Controls enabled' : 'Read only';
   access.className = 'pill '+(status.control?'good':'warn');
 }
-async function refresh() {
-  try { status = await api('status'); }
-  catch { status = {...status,online:false,control:false}; }
+function applyStatus(next) {
+  const previous = status;
+  status = next;
   refreshChrome();
   if (page === 'overview') updateOverview();
-  if (monitorPages[page]) updateReadings();
+  const readingsGroup = monitorPages[page]?.[2];
+  if (readingsGroup && previous.data[readingsGroup]?.at!==status.data[readingsGroup]?.at) updateReadings();
+  for (const reading of main.querySelectorAll('[data-live-metric]')) {
+    reading.textContent = display(signal(reading.dataset.liveMetric));
+  }
+  if (status.historyRevision!==previous.historyRevision) refreshPageHistory?.();
+}
+async function refresh() {
+  const request = ++statusRequest;
+  let next;
+  try { next = await api('status'); }
+  catch { next = {...status,online:false,control:false}; }
+  if (statusRequest===request) applyStatus(next);
+}
+function stopStatusPolling() {
+  clearInterval(statusPoll);
+  statusPoll = 0;
+}
+function startStatusPolling() {
+  if (statusPoll || document.hidden) return;
+  refresh();
+  statusPoll = setInterval(refresh,5000);
+}
+function stopStatusStream() {
+  statusSource?.close();
+  statusSource = null;
+  stopStatusPolling();
+  statusRequest++;
+}
+function connectWhileVisible() {
+  if (document.hidden) {
+    stopStatusStream();
+    return;
+  }
+  if (statusSource || statusPoll) return;
+  if (typeof EventSource !== 'function') {
+    startStatusPolling();
+    return;
+  }
+  const source = new EventSource('/api/status/stream');
+  statusSource = source;
+  source.onmessage = event=>{
+    if (statusSource!==source) return;
+    let next;
+    try { next = JSON.parse(event.data); }
+    catch { startStatusPolling(); return; }
+    statusRequest++;
+    stopStatusPolling();
+    applyStatus(next);
+  };
+  source.onerror = ()=>{ if (statusSource===source) startStatusPolling(); };
 }
 function metric(key, sub='') {
   return dom('article',{class:'card metric'},dom('p',{class:'metric-label'},titleSignal(key)),
-    dom('div',{class:'metric-reading'},display(signal(key)),unitSignal(key)&&dom('small',{},unitSignal(key))),
+    dom('div',{class:'metric-reading'},dom('span',{'data-live-metric':key},display(signal(key))),unitSignal(key)&&dom('small',{},unitSignal(key))),
     sub&&dom('p',{class:'metric-sub'},sub));
 }
 function updateOverview() {
@@ -253,7 +308,7 @@ function updateOverview() {
     return dom('div',{class:'compact-reading'},dom('span',{},titleSignal(key)),
       dom('strong',{},withUnit(value,unitSignal(key))));
   }));
-  if (focusedAction) live.querySelector('[data-action=+focusedAction+]').focus({preventScroll:true});
+  if (focusedAction) live.querySelector('[data-action="'+focusedAction+'"]')?.focus({preventScroll:true});
 }
 function withUnit(value,unit) {
   return display(value)+(value==null||!unit?'':' '+unit);
@@ -263,7 +318,8 @@ function overview(token) {
   const chartBody = dom('div',{},empty('Loading temperature history…'));
   const recent = dom('div',{},empty('Loading recent messages…'));
   const metricsPanel = dom('div',{},empty('Waiting for telemetry…'));
-  const customise = dom('details',{},dom('summary',{},'Choose overview readings'),metricsPanel);
+  const customise = dom('details',{},dom('summary',{},'Choose overview readings'),
+    dom('p',{class:'muted text-xs'},'Choose up to four readings. When all four are selected, a new one replaces the oldest selection.'),metricsPanel);
   main.replaceChildren(heading('Pellet boiler'),
     dom('div',{class:'stack'},live,
       dom('div',{class:'grid split'},
@@ -276,11 +332,20 @@ function overview(token) {
     saveLocal('metrics',selection);
     updateOverview();
     renderChooser();
-  });
+  },{replaceOldest:true});
   customise.addEventListener('toggle',()=>{if(customise.open)renderChooser();});
-  loadHistory(['operating_data.boiler_temp','operating_data.boiler_ref'],86400)
-    .then(data=>{if(token===generation) showChart(chartBody,data,86400,true);})
-    .catch(error=>chartBody.replaceChildren(empty(error.message)));
+  let historyRequest = 0;
+  const refreshChart = async(showError=false)=>{
+    const request = ++historyRequest;
+    try {
+      const data = await loadHistory(['operating_data.boiler_temp','operating_data.boiler_ref'],86400);
+      if(token===generation&&request===historyRequest) showChart(chartBody,data,86400,true);
+    } catch(error) {
+      if(showError&&token===generation&&request===historyRequest) chartBody.replaceChildren(empty(error.message));
+    }
+  };
+  refreshPageHistory = refreshChart;
+  refreshChart(true);
   api('notifications').then(items=>{if(token===generation) recent.replaceChildren(noticeList(items.slice(0,4),false));})
     .catch(error=>recent.replaceChildren(empty(error.message)));
 }
@@ -295,14 +360,23 @@ function measurementKeys() {
   for (const key of keys) if (signal(key)==null && !chosenSignals.includes(key) && !chosenMetrics.includes(key)) keys.delete(key);
   return [...keys].sort((a,b)=>titleSignal(a).localeCompare(titleSignal(b))||a.localeCompare(b));
 }
-function chooseSignals(target,selected,limit,change) {
+function chooseSignals(target,selected,limit,change,{replaceOldest=false}={}) {
   const keys = measurementKeys();
-  target.replaceChildren(keys.length ? dom('div',{class:'signal-chooser'},keys.map(key=>{
+  const previous = target.querySelector('.signal-chooser');
+  const focused = previous?.contains(document.activeElement) ? document.activeElement.value : null;
+  const scrollTop = previous?.scrollTop ?? 0;
+  const chooser = dom('div',{class:'signal-chooser'},keys.map(key=>{
     const checked = selected.includes(key);
-    return dom('label',{},dom('input',{type:'checkbox',checked,disabled:!checked&&selected.length>=limit,
-      onchange:()=>change(checked?selected.filter(k=>k!==key):[...selected,key])}),titleSignal(key),
+    return dom('label',{},dom('input',{type:'checkbox',value:key,checked,
+      disabled:!replaceOldest&&!checked&&selected.length>=limit,
+      onchange:()=>change(checked?selected.filter(k=>k!==key):[...selected,key].slice(-limit))}),titleSignal(key),
       key.startsWith('advanced_data.')?' · Advanced':'');
-  })) : empty('Measurements will appear after the first controller reading.'));
+  }));
+  target.replaceChildren(keys.length ? chooser : empty('Measurements will appear after the first controller reading.'));
+  chooser.scrollTop = scrollTop;
+  if (focused) {
+    [...chooser.querySelectorAll('input')].find(input=>input.value===focused)?.focus({preventScroll:true});
+  }
 }
 function loadHistory(keys,duration) {
   const args = new URLSearchParams({from:Math.floor(Date.now()/1000)-duration});
@@ -319,14 +393,16 @@ function charts(token) {
       .map(([value,label])=>dom('option',{value,selected:value===duration},label)));
   let data;
   const csv = btn('Export CSV',()=>downloadCSV(data),'secondary',{disabled:true});
-  const load = async ()=>{
+  const load = async(showLoading=true)=>{
     const id = ++request;
     if (!chosenSignals.length) {
       chartBody.replaceChildren(empty('Choose up to eight signals to chart.'));
       csv.disabled=true; return;
     }
-    csv.disabled=true;
-    chartBody.replaceChildren(empty('Loading history…'));
+    if(showLoading) {
+      csv.disabled=true;
+      chartBody.replaceChildren(empty('Loading history…'));
+    }
     try {
       const loaded = await loadHistory(chosenSignals,duration);
       if(token!==generation||request!==id)return;
@@ -334,7 +410,7 @@ function charts(token) {
       showChart(chartBody,data,duration);
       csv.disabled=!Object.values(data).some(points=>points.length);
     } catch(error) {
-      if(request===id)chartBody.replaceChildren(empty(error.message));
+      if(request===id&&token===generation&&showLoading)chartBody.replaceChildren(empty(error.message));
     }
   };
   const choose = ()=>chooseSignals(signals,chosenSignals,8,selection=>{
@@ -344,6 +420,7 @@ function charts(token) {
     card('Signal history','Each signal keeps its own unit.',
       dom('div',{class:'toolbar'},dom('label',{},'Period',range),csv),
       chartBody,dom('details',{open:true},dom('summary',{},'Select signals'),signals)));
+  refreshPageHistory = ()=>load(false);
   choose(); load();
 }
 
@@ -360,6 +437,7 @@ function chartBounds(series) {
 }
 function showChart(target,data,duration,compact=false) {
   const entries = Object.entries(data).filter(([,points])=>points.length);
+  resizeChart = null;
   if(!entries.length){target.replaceChildren(empty('No readings in this period yet.'));return;}
   const units = new Set(entries.map(([key])=>unitSignal(key)));
   const mixed = units.size>1;
@@ -411,7 +489,7 @@ function showChart(target,data,duration,compact=false) {
     }
   };
   requestAnimationFrame(render);
-  window.addEventListener('resize',render,{signal:pageAbort.signal});
+  resizeChart = render;
 }
 function chartStep(rough) {
   const scale = 10 ** Math.floor(Math.log10(rough));
@@ -532,7 +610,7 @@ async function checkDesktopNotices() {
   try {
     const rows=await api('notifications');
     if(noticeReady)rows.filter(row=>row.id>lastDesktopNotice&&noticeFilter.includes(row.kind)&&!row.read)
-      .reverse().forEach(row=>new Notification('Boiler Mate', {body:row.message,tag:'boiler-'+row.id}));
+      .reverse().forEach(row=>new Notification('Boiler Mate', {body:row.message,icon:'/icon-192.png',tag:'boiler-'+row.id}));
     lastDesktopNotice=Math.max(lastDesktopNotice,rows[0]?.id??0);
     noticeReady=true;
   } catch {}
@@ -710,10 +788,9 @@ function helpPage() {
         dom('p',{},dom('a',{href:'https://github.com/mlipscombe/boiler-mate',target:'_blank',rel:'noreferrer'},'Boiler Mate project and configuration')))));
 }
 
-let pageAbort=new AbortController();
 function renderPage() {
-  pageAbort.abort();
-  pageAbort=new AbortController();
+  refreshPageHistory = null;
+  resizeChart = null;
   const [requested,requestedSection]=window.location.hash.slice(1).split('/');
   page=navigation.flatMap(([,items])=>items).some(([id])=>id===requested)?requested:'overview';
   const sections=groups[page]?.[2] ?? (page==='consumption'?consumptionPeriods:[]);
@@ -732,6 +809,9 @@ function renderPage() {
 
 document.querySelector('.skip').addEventListener('click',event=>{event.preventDefault();main.focus();});
 window.addEventListener('hashchange',()=>{if(window.location.hash!=='#content')renderPage();});
-refresh().then(renderPage);
-setInterval(refresh,5000);
+window.addEventListener('resize',()=>resizeChart?.());
+document.addEventListener('visibilitychange',connectWhileVisible);
+window.addEventListener('pagehide',stopStatusStream);
+window.addEventListener('pageshow',connectWhileVisible);
+refresh().then(()=>{renderPage();connectWhileVisible();});
 setInterval(checkDesktopNotices,15000);

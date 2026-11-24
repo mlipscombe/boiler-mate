@@ -4,7 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f8f9fc">
+  <meta name="apple-mobile-web-app-title" content="Boiler Mate">
   <title>Boiler Mate</title>
+  <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+  <link rel="icon" href="/flame.svg" type="image/svg+xml" sizes="any">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="/site.webmanifest">
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
 </head>
@@ -13,9 +19,9 @@
   <div class="shell">
     <aside class="sidebar">
       <div class="flex items-center gap-3 md:block">
-      <a class="brand" href="#overview">
-        <span class="brand-icon" aria-hidden="true">BM</span><span>Boiler Mate</span>
-      </a>
+        <a class="brand" href="#overview">
+          <img class="brand-icon" src="/flame.svg" alt="" width="32" height="32"><span>Boiler Mate</span>
+        </a>
         <select id="mobile-navigation" class="mobile-navigation" aria-label="Open a dashboard page"></select>
       </div>
       <nav id="navigation" aria-label="Boiler navigation"></nav>

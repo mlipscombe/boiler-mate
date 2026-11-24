@@ -40,6 +40,8 @@ type UI struct {
 	mu         sync.RWMutex
 	snapshots  map[string]snapshot
 	lastSample map[string]time.Time
+	changed    chan struct{}
+	historyRev uint64
 	lastState  string
 	lastInfo   string
 	offline    bool
@@ -58,6 +60,7 @@ func New(ctx context.Context, logger *slog.Logger, boiler controller, serial, da
 	return &UI{
 		controller: boiler, write: write, store: store, logger: logger, serial: serial,
 		snapshots: make(map[string]snapshot), lastSample: make(map[string]time.Time),
+		changed: make(chan struct{}),
 	}, nil
 }
 
@@ -79,6 +82,9 @@ func (ui *UI) Observe(ctx context.Context, topic string, values map[string]any) 
 	ui.mu.Lock()
 	ui.snapshots[topic] = snapshot{At: now, Values: values}
 	isTelemetry := topic == "operating_data" || topic == "advanced_data"
+	if isTelemetry {
+		ui.signalChange()
+	}
 	sample := isTelemetry && now.Truncate(time.Minute) != ui.lastSample[topic]
 	if sample {
 		ui.lastSample[topic] = now.Truncate(time.Minute)
@@ -104,7 +110,12 @@ func (ui *UI) Observe(ctx context.Context, topic string, values map[string]any) 
 	ui.mu.Unlock()
 
 	if sample {
-		if err := ui.store.record(ctx, topic, now, values); err != nil && ctx.Err() == nil {
+		if err := ui.store.record(ctx, topic, now, values); err == nil {
+			ui.mu.Lock()
+			ui.historyRev++
+			ui.signalChange()
+			ui.mu.Unlock()
+		} else if ctx.Err() == nil {
 			ui.logger.Warn("Could not save telemetry", "group", topic, "error", err)
 		}
 	}
@@ -184,6 +195,7 @@ func (ui *UI) addEvent(ctx context.Context, at time.Time, kind, message string) 
 func (ui *UI) Handler() http.Handler {
 	router := http.NewServeMux()
 	router.HandleFunc("GET /api/status", ui.getStatus)
+	router.HandleFunc("GET /api/status/stream", ui.streamStatus)
 	router.HandleFunc("GET /api/history", ui.getHistory)
 	router.HandleFunc("GET /api/consumption", ui.getConsumption)
 	router.HandleFunc("GET /api/events", ui.getEvents)
@@ -197,7 +209,12 @@ func (ui *UI) Handler() http.Handler {
 	if err != nil {
 		panic(err)
 	}
-	router.Handle("GET /", http.FileServerFS(files))
+	static := http.FileServerFS(files)
+	router.Handle("GET /", static)
+	router.HandleFunc("GET /site.webmanifest", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/manifest+json")
+		static.ServeHTTP(w, r)
+	})
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -219,15 +236,8 @@ func (ui *UI) Handler() http.Handler {
 }
 
 func (ui *UI) getStatus(w http.ResponseWriter, _ *http.Request) {
-	ui.mu.RLock()
-	data := maps.Clone(ui.snapshots)
-	ui.mu.RUnlock()
-	status := data["operating_data"]
-	writeJSON(w, map[string]any{
-		"serial": ui.serial, "data": data,
-		"online":  !status.At.IsZero() && time.Since(status.At) < 20*time.Second,
-		"control": ui.write != nil,
-	})
+	status, _ := ui.statusSnapshot(false)
+	writeJSON(w, status)
 }
 
 func (ui *UI) getHistory(w http.ResponseWriter, r *http.Request) {
