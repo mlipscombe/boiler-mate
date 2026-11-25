@@ -94,6 +94,7 @@ func (ui *UI) runEfficiency(ctx context.Context) {
 	defer ticker.Stop()
 	for ctx.Err() == nil {
 		now := time.Now()
+		ui.recordWeather(ctx, now)
 		report, err := ui.store.efficiencyReport(ctx, ui.serial, now)
 		if err == nil {
 			ui.mu.Lock()

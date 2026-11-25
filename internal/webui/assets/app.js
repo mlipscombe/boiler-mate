@@ -1271,7 +1271,8 @@ function timerEditor(group,fields,canEdit,reload) {
 function efficiencyPage(token) {
   const content=dom('div',{class:'stack','aria-live':'polite'},empty('Loading observations…'));
   main.replaceChildren(heading('Efficiency suggestions',
-    'Review repeated patterns in burner runs, thermostat demand, and temperature regulation.'),content);
+    'Review repeated patterns in burner runs, thermostat demand, and temperature regulation.'),
+    renderSections('efficiency',efficiencySections,'suggestions','Efficiency views'),content);
   let lastRequest=0;
   async function load() {
     const request=++lastRequest;
@@ -1354,6 +1355,7 @@ function renderPage() {
     if(section==='ledger')pelletLedgerPage(token);
     else consumption(section,token);
   }
+  else if (page==='efficiency' && requestedSection==='weather') degreeWeatherPage(token);
   else if (page==='efficiency') efficiencyPage(token);
   else if (page==='events') activity(token,hashPage==='messages'?'notices':'',hashPage==='notifications'||requestedSection==='notifications');
   else if (page==='external-heating') externalHeatingPage(token);

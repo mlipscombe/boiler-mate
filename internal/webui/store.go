@@ -94,7 +94,7 @@ func openStore(ctx context.Context, dir string) (*store, error) {
 			failures INTEGER NOT NULL DEFAULT 0,
 			retry_at INTEGER NOT NULL DEFAULT 0
 		);
-	`+pelletSchema)
+	`+pelletSchema+weatherSchema)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("initialize history: %w", err), db.Close())
 	}
@@ -234,6 +234,9 @@ func (s *store) prune(ctx context.Context, now time.Time) error {
 	`, now.AddDate(0, 0, -30).Unix(), now.AddDate(-1, 0, 0).Unix())
 	if err == nil {
 		_, err = s.db.ExecContext(ctx, "DELETE FROM efficiency_samples WHERE time < ?", now.Add(-efficiency.Lookback).UnixMilli())
+	}
+	if err == nil {
+		_, err = s.db.ExecContext(ctx, "DELETE FROM weather_observations WHERE time < ?", now.AddDate(-2, 0, 0).Unix())
 	}
 	return err
 }

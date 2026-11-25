@@ -250,6 +250,7 @@ func (ui *UI) Handler() http.Handler {
 	router.HandleFunc("DELETE /api/pellets/purchases/{id}", ui.deletePelletPurchase)
 	router.HandleFunc("PUT /api/pellets/settings", ui.putPelletSettings)
 	router.HandleFunc("GET /api/efficiency", ui.getEfficiency)
+	router.HandleFunc("GET /api/efficiency/weather", ui.getDegreeReport)
 	router.HandleFunc("GET /api/events", ui.getEvents)
 	router.HandleFunc("GET /api/controller/{kind}", ui.getControllerRead)
 	router.HandleFunc("GET /api/notifications", ui.getNotices)

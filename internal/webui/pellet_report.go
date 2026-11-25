@@ -25,12 +25,13 @@ type pelletSettings struct {
 }
 
 type pelletPeriod struct {
-	Kind     string    `json:"kind"`
-	From     time.Time `json:"from"`
-	To       time.Time `json:"to"`
-	UsedKG   float64   `json:"usedKg"`
-	PricedKG float64   `json:"pricedKg"`
-	Cost     float64   `json:"cost"`
+	Kind       string             `json:"kind"`
+	From       time.Time          `json:"from"`
+	To         time.Time          `json:"to"`
+	UsedKG     float64            `json:"usedKg"`
+	PricedKG   float64            `json:"pricedKg"`
+	Cost       float64            `json:"cost"`
+	BrandUsage map[string]float64 `json:"brandUsage,omitempty"`
 }
 
 type pelletReport struct {
@@ -163,20 +164,32 @@ func (a *pelletAllocation) use(from, to int64, kg float64) {
 			end = min(end, a.boundaries[0])
 		}
 		used := kg * float64(end-start) / seconds
-		priced, cost := a.consume(used, start, end)
+		var brands map[string]float64
+		if len(a.periods) > 0 && len(a.lots) > 0 {
+			brands = make(map[string]float64)
+		}
+		priced, cost := a.consume(used, start, end, brands)
 		for i := range a.periods {
 			period := &a.periods[i]
 			if start >= period.From.Unix() && start < period.To.Unix() {
 				period.UsedKG += used
 				period.PricedKG += priced
 				period.Cost += cost
+				if len(brands) > 0 {
+					if period.BrandUsage == nil {
+						period.BrandUsage = make(map[string]float64)
+					}
+					for brand, amount := range brands {
+						period.BrandUsage[brand] += amount
+					}
+				}
 			}
 		}
 		start = end
 	}
 }
 
-func (a *pelletAllocation) consume(kg float64, from, to int64) (priced, cost float64) {
+func (a *pelletAllocation) consume(kg float64, from, to int64, brands map[string]float64) (priced, cost float64) {
 	for kg > 0 && len(a.lots) > 0 {
 		lot := &a.lots[0]
 		used := min(lot.remaining, kg)
@@ -185,6 +198,9 @@ func (a *pelletAllocation) consume(kg float64, from, to int64) (priced, cost flo
 		}
 		lot.brand.LastUsed = to
 		lot.brand.UsedKG += used
+		if brands != nil {
+			brands[lot.brand.Name] += used
+		}
 		if lot.priceKG != nil {
 			priced += used
 			cost += used * *lot.priceKG

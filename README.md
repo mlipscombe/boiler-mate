@@ -79,6 +79,10 @@ Open **Monitor → Efficiency** to see what Boiler Mate has observed over the la
 
 Boiler Mate looks for repeated short burns that reach the boiler’s temperature stop while the same loops still call, oscillation during steady firing with usable P and I readings, and repeated runs that stay below target at the controller’s maximum output. Suggestions show the calling loops, measured evidence, and what to check. Startup, hot-water priority, signal gaps, and changes in operating conditions can interrupt an observation. Suggestions are advisory and require no controller writes.
 
+Under **Efficiency → Weather & fuel**, Boiler Mate keeps two years of outdoor observations. It prefers the selected local MQTT sensor when the reading is current and otherwise uses the boiler’s remote weather feed. Reports integrate the degrees below an adjustable heating base over the observed hours. The default is 65 °F. Equivalent heating degree days are degree hours divided by 24. Check the source and coverage columns when comparing periods.
+
+The fuel trend pairs weather with completed periods from the pellet ledger. Boiler Mate reports kilograms per equivalent degree day when weather coverage and the pellet counter support the comparison. Brand comparisons use periods attributed to one brand by the ledger. Pellet use can include domestic hot water, and the ledger estimates which purchase was consumed.
+
 ### Controller reads in the dashboard and MQTT
 
 Open **Charts → Controller history** for chart IDs stored by the boiler, **Events → Controller log** for its event log, **Live data → Selected readings** for a one-time group of operating values, or **System → Firmware versions / Wireless sensors** for controller lists. Firmware and hardware determine which reads succeed. Chart IDs have controller-specific meanings.
