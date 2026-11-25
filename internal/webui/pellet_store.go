@@ -50,7 +50,7 @@ func (s *store) recordPelletCounter(ctx context.Context, serial string, at time.
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	var previousSerial string
 	var previousAt int64
@@ -110,7 +110,7 @@ func (s *store) pelletReport(ctx context.Context, now time.Time, periods []pelle
 	if err != nil {
 		return pelletReport{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	settings, _, err := loadPelletSettings(ctx, tx)
 	if err != nil {
 		return pelletReport{}, err
@@ -126,7 +126,7 @@ func buildPelletReport(ctx context.Context, tx *sql.Tx, settings pelletSettings,
 	if err != nil {
 		return report, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var entry pelletPurchase
 		var at int64
@@ -160,7 +160,7 @@ func buildPelletReport(ctx context.Context, tx *sql.Tx, settings pelletSettings,
 		if err != nil {
 			return report, err
 		}
-		defer usage.Close()
+		defer func() { _ = usage.Close() }()
 		for usage.Next() {
 			var start, end int64
 			var kg float64
@@ -186,7 +186,7 @@ func (s *store) checkPelletSupply(ctx context.Context, now time.Time, serial str
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	settings, notified, err := loadPelletSettings(ctx, tx)
 	if err != nil || settings.LowWeight == 0 {
 		return false, err

@@ -70,7 +70,7 @@ func TestEfficiencyReportUsesPersistedThermostatAndControllerObservations(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ui.Close()
+	t.Cleanup(func() { _ = ui.Close() })
 	ctx, cancel := context.WithCancel(t.Context())
 	stopped := make(chan struct{})
 	go func() {

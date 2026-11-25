@@ -97,7 +97,7 @@ func (s *store) fillWeatherPeriods(ctx context.Context, serial string, baseC, un
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	index := len(periods) - 1
 	for rows.Next() {

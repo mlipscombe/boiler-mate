@@ -28,7 +28,7 @@ func TestDegreeWeatherPrefersLocalAndRecordsComparableHours(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ui.Close()
+	t.Cleanup(func() { _ = ui.Close() })
 	now := time.Now()
 	at := now
 	ui.snapshots["advanced_data"] = snapshot{at, map[string]any{"outdoor_temp": int64(50)}}
@@ -78,7 +78,7 @@ func TestDegreeReportSupportsDSTAndMatchesSingleBrand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ui.Close()
+	t.Cleanup(func() { _ = ui.Close() })
 	ctx := t.Context()
 	if _, err := ui.store.db.ExecContext(ctx, `
 		INSERT INTO pellet_purchases (id, purchased_at, quantity, weight, unit, brand, price)
