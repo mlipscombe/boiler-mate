@@ -75,7 +75,11 @@ func (in *input) receive(topic string, payload []byte, retained bool, now time.T
 		return
 	}
 	if in.spec.Kind == thermostat {
-		if state, ok := actionValue(in.spec.Value, value); ok {
+		state, valid := actionValue(in.spec.Value, value)
+		if in.spec.ZWave {
+			state, valid = zwaveAction(value)
+		}
+		if valid {
 			in.action, in.at = state, now
 		}
 	} else if celsius, ok := temperatureValue(in.spec.Unit, value); ok {

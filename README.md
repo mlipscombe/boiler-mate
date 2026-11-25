@@ -66,6 +66,8 @@ The start and stop commands operate the entire boiler, including domestic hot wa
 
 Boiler Mate reads Home Assistant MQTT discovery on the same broker. It supports MQTT climate entities with an action topic and MQTT temperature sensors reporting °C, °F, or K. Plain payloads, simple JSON field templates, and Zigbee2MQTT's standard climate action mapping are supported. Retain discovery messages and current readings for use after a reconnect, and publish availability separately when the device supports it. Devices with unsupported discovery configurations show the reason on the page. [Home Assistant MQTT discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery) · [MQTT climate actions](https://www.home-assistant.io/integrations/climate.mqtt/#action_topic)
 
+The page also discovers thermostats directly from a Z-Wave JS UI gateway using named MQTT topics under the `zwave` prefix. It uses the thermostat's operating state and the node, driver, and gateway availability topics. [Z-Wave JS UI MQTT guide](https://github.com/zwave-js/zwave-js-ui/blob/master/docs/guide/mqtt.md)
+
 ### Controller reads in the dashboard and MQTT
 
 Open **Charts → Controller history** for chart IDs stored by the boiler, **Events → Controller log** for its event log, **Live data → Selected readings** for a one-time group of operating values, or **System → Firmware versions / Wireless sensors** for controller lists. Firmware and hardware determine which reads succeed. Chart IDs have controller-specific meanings.

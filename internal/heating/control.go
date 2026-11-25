@@ -36,6 +36,8 @@ type Control struct {
 	savedState
 	watch          func([]string)
 	discovery      map[string][]inputSpec
+	zwaveDevices   map[string]inputSpec
+	zwaveGateways  map[string]struct{}
 	active         map[string]*input
 	missingSince   map[string]time.Time
 	seenThermostat bool
@@ -80,6 +82,7 @@ func New(dataDir, serial string, logger *slog.Logger, write WriteFunc) *Control 
 	control := &Control{
 		path: path, logger: logger, write: write, wake: make(chan struct{}, 1),
 		discovery: make(map[string][]inputSpec), missingSince: make(map[string]time.Time), band: -1,
+		zwaveDevices: make(map[string]inputSpec), zwaveGateways: make(map[string]struct{}),
 		savedState: saved, cutoff: saved.OutdoorResume,
 	}
 	if err != nil {
@@ -164,6 +167,9 @@ func (c *Control) Receive(topic string, payload []byte, retained bool) {
 		}
 		c.updateInputs()
 	default:
+		if c.receiveZWave(topic, payload) {
+			c.updateInputs()
+		}
 		for _, in := range c.active {
 			in.receive(topic, payload, retained, now)
 		}
@@ -176,6 +182,8 @@ func (c *Control) Disconnected() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	clear(c.discovery)
+	clear(c.zwaveDevices)
+	clear(c.zwaveGateways)
 	c.updateInputs()
 	c.updateDemand(time.Now())
 	c.notify()
@@ -183,22 +191,28 @@ func (c *Control) Disconnected() {
 
 func (c *Control) updateInputs() {
 	selected := make(map[string]*input)
-	topics := discoveryTopics(c.Settings.DiscoveryPrefix)
+	topics := append(discoveryTopics(c.Settings.DiscoveryPrefix), zwaveTopics...)
+	activate := func(spec inputSpec) {
+		if spec.Problem != "" || !c.selected(spec) {
+			return
+		}
+		in := c.active[spec.ID]
+		if in == nil || !sameSignal(in.spec, spec) {
+			in = newInput(spec)
+		}
+		selected[spec.ID] = in
+		topics = append(topics, spec.Value.Topic)
+		for _, source := range spec.Availability {
+			topics = append(topics, source.Topic)
+		}
+	}
 	for _, specs := range c.discovery {
 		for _, spec := range specs {
-			if spec.Problem != "" || !c.selected(spec) {
-				continue
-			}
-			in := c.active[spec.ID]
-			if in == nil || !sameSignal(in.spec, spec) {
-				in = newInput(spec)
-			}
-			selected[spec.ID] = in
-			topics = append(topics, spec.Value.Topic)
-			for _, source := range spec.Availability {
-				topics = append(topics, source.Topic)
-			}
+			activate(spec)
 		}
+	}
+	for _, spec := range c.zwaveDevices {
+		activate(c.zwaveInput(spec))
 	}
 	c.active = selected
 	if c.watch != nil {
@@ -289,13 +303,19 @@ func (c *Control) Snapshot() Status {
 	_, status := c.plan(time.Now())
 	status.Settings.Bands = slices.Clone(status.Settings.Bands)
 	status.Settings.Thermostats = slices.Clone(status.Settings.Thermostats)
+	add := func(spec inputSpec) {
+		status.Inputs = append(status.Inputs, InputStatus{
+			ID: spec.ID, Name: spec.Name, Kind: spec.Kind, Topic: spec.Value.Topic, Problem: spec.Problem,
+			Action: c.active[spec.ID].currentAction(),
+		})
+	}
 	for _, specs := range c.discovery {
 		for _, spec := range specs {
-			status.Inputs = append(status.Inputs, InputStatus{
-				ID: spec.ID, Name: spec.Name, Kind: spec.Kind, Topic: spec.Value.Topic, Problem: spec.Problem,
-				Action: c.active[spec.ID].currentAction(),
-			})
+			add(spec)
 		}
+	}
+	for _, spec := range c.zwaveDevices {
+		add(c.zwaveInput(spec))
 	}
 	slices.SortFunc(status.Inputs, func(a, b InputStatus) int {
 		if a.Name == b.Name {

@@ -55,6 +55,7 @@ type valueSource struct {
 	Topic             string
 	Field             string
 	ZigbeeAction      bool
+	FallbackRaw       bool
 	TemperatureFormat string
 }
 
@@ -70,6 +71,7 @@ type inputSpec struct {
 	Mode                 string
 	ExpireAfter          time.Duration
 	Problem              string
+	ZWave                bool
 }
 
 func readDiscovery(topic, kind string, payload []byte) []inputSpec {
@@ -259,7 +261,13 @@ func (s valueSource) value(payload []byte) (string, bool) {
 		return value, true
 	}
 	var obj map[string]json.RawMessage
-	if json.Unmarshal(payload, &obj) != nil || obj[s.Field] == nil {
+	if json.Unmarshal(payload, &obj) != nil {
+		if s.FallbackRaw {
+			return strings.TrimSpace(string(payload)), true
+		}
+		return "", false
+	}
+	if obj[s.Field] == nil {
 		return "", false
 	}
 	field := obj[s.Field]

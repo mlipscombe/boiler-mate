@@ -104,6 +104,11 @@ func (s Settings) validSource(id, kind string) bool {
 	if len(id) > 512 || strings.ContainsAny(topic, "+\x00") {
 		return false
 	}
+	if kind == "climate" && !split {
+		if _, _, ok := zwaveNode(topic); ok {
+			return true
+		}
+	}
 	actual := discoveryKind(s.DiscoveryPrefix, topic)
 	if split {
 		return actual == "device" && componentPattern.MatchString(component)

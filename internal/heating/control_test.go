@@ -236,6 +236,40 @@ func TestRTL433OutdoorTemperature(t *testing.T) {
 	}
 }
 
+func TestZWaveDirectThermostat(t *testing.T) {
+	const node = "zwave/Dining_Room/Downstairs_Thermostat"
+	const operating = node + "/thermostat_operating_state/endpoint_0/state"
+	const gateway = "zwave/_CLIENTS/ZWAVE_GATEWAY-broker/status"
+	s := defaultSettings()
+	s.Enabled, s.Thermostats = true, []string{operating}
+	c := newTestControl(t, s)
+	c.boiler = "OFF"
+	c.Receive(operating, []byte(`{"value":1}`), true)
+	if inputs := c.Snapshot().Inputs; len(inputs) != 1 || inputs[0].Name != "Downstairs Thermostat" || inputs[0].Problem == "" {
+		t.Fatalf("discovery without gateway availability = %+v", inputs)
+	}
+	c.Receive(gateway, []byte(`{"value":true}`), true)
+	c.Receive(node+"/status", []byte(`{"value":true,"status":"Alive"}`), true)
+	c.Receive(operating, []byte(`{"value":1}`), true)
+	if got := nextAt(c, time.Now()); got.key != "" {
+		t.Fatalf("issued %+v before driver readiness", got)
+	}
+	c.Receive("zwave/driver/status", []byte("true"), true)
+	if got := nextAt(c, time.Now()); got.key != Start {
+		t.Fatalf("ready gateway and heating = %+v, want start", got)
+	}
+	c.Receive(gateway, []byte(`{"value":false}`), false)
+	c.Receive(operating, []byte(`{"value":1}`), true)
+	c.Receive(gateway, []byte(`{"value":true}`), false)
+	if got := nextAt(c, time.Now()); got.key != "" {
+		t.Fatalf("issued %+v using stale heat demand after gateway reconnect", got)
+	}
+	c.Receive(operating, []byte(`{"value":8}`), false)
+	if got := nextAt(c, time.Now()); got.key != Start {
+		t.Fatalf("second-stage heat demand = %+v, want start", got)
+	}
+}
+
 func nextAt(c *Control, now time.Time) command {
 	c.boilerAt = now
 	got, _ := c.plan(now)
