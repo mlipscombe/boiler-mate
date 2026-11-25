@@ -92,7 +92,7 @@ func TestExternalHeatingWithMosquitto(t *testing.T) {
 		if err != nil {
 			return heating.Status{}, false
 		}
-		defer response.Body.Close()
+		defer func() { _ = response.Body.Close() }()
 		var state heating.Status
 		return state, json.NewDecoder(response.Body).Decode(&state) == nil
 	}
@@ -111,7 +111,7 @@ func TestExternalHeatingWithMosquitto(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer response.Body.Close()
+		defer func() { _ = response.Body.Close() }()
 		if response.StatusCode != 200 {
 			message, _ := io.ReadAll(response.Body)
 			t.Fatalf("save external heating settings = %d %s", response.StatusCode, message)

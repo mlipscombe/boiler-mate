@@ -134,7 +134,7 @@ func readInput(id, kind string, payload discoveryPayload) (inputSpec, bool) {
 		class := payload.str("device_class", "dev_cla")
 		input.Unit = payload.str("unit_of_measurement", "unit_of_meas")
 		temperatureUnit := slices.Contains([]string{"°C", "°F", "K"}, input.Unit)
-		if class != "temperature" && !(class == "" && temperatureUnit) {
+		if class != "temperature" && (class != "" || !temperatureUnit) {
 			return inputSpec{}, false
 		}
 		input.Kind = temperature
@@ -192,12 +192,12 @@ func readInput(id, kind string, payload discoveryPayload) (inputSpec, bool) {
 const jsonFieldPattern = `value_json(?:\.([A-Za-z0-9_]+)|\["([A-Za-z0-9_]+)"\]|\['([A-Za-z0-9_]+)'\])`
 
 var (
-	fieldTemplate       = regexp.MustCompile(`^\{\{\s*` + jsonFieldPattern + `\s*\}\}$`)
-	zigbeeTemplate      = regexp.MustCompile(`^\{%\s*set values\s*=\s*\{\s*None\s*:\s*None\s*,\s*'idle'\s*:\s*'idle'\s*,\s*'heat'\s*:\s*'heating'\s*,\s*'cool'\s*:\s*'cooling'\s*,\s*'fan_only'\s*:\s*'fan'\s*\}\s*%\}\s*\{\{\s*values\[` + jsonFieldPattern + `\]\s*\}\}$`)
-	rawTemplate         = regexp.MustCompile(`^\{\{\s*value\s*\}\}$`)
-	fieldGuard          = regexp.MustCompile(`^\{%\s*if\s+"([A-Za-z0-9_]+)"\s+in value_json\s*%\}\s*(.*?)\s*\{%\s*endif\s*%\}$`)
-	temperatureTemplate = regexp.MustCompile(`^\{\{\s*value\s*\|\s*float\s*(?:\|\s*round\(\s*([0-6])\s*\)\s*)?\}\}$`)
-	unsupportedTemplate = errors.New("The device advertises an unsupported MQTT value template.")
+	fieldTemplate          = regexp.MustCompile(`^\{\{\s*` + jsonFieldPattern + `\s*\}\}$`)
+	zigbeeTemplate         = regexp.MustCompile(`^\{%\s*set values\s*=\s*\{\s*None\s*:\s*None\s*,\s*'idle'\s*:\s*'idle'\s*,\s*'heat'\s*:\s*'heating'\s*,\s*'cool'\s*:\s*'cooling'\s*,\s*'fan_only'\s*:\s*'fan'\s*\}\s*%\}\s*\{\{\s*values\[` + jsonFieldPattern + `\]\s*\}\}$`)
+	rawTemplate            = regexp.MustCompile(`^\{\{\s*value\s*\}\}$`)
+	fieldGuard             = regexp.MustCompile(`^\{%\s*if\s+"([A-Za-z0-9_]+)"\s+in value_json\s*%\}\s*(.*?)\s*\{%\s*endif\s*%\}$`)
+	temperatureTemplate    = regexp.MustCompile(`^\{\{\s*value\s*\|\s*float\s*(?:\|\s*round\(\s*([0-6])\s*\)\s*)?\}\}$`)
+	errUnsupportedTemplate = errors.New("unsupported MQTT value template")
 )
 
 func readTemperatureSource(base, topic, template string) (valueSource, error) {
@@ -217,7 +217,7 @@ func readValueSource(base, topic, template string, action bool) (valueSource, er
 		topic = topic[:len(topic)-1] + base
 	}
 	if topic == "" || strings.ContainsAny(topic, "\x00+#") || !utf8.ValidString(topic) || len(topic) > 65535 {
-		return valueSource{}, errors.New("No usable MQTT state topic is advertised.")
+		return valueSource{}, errors.New("no usable MQTT state topic is advertised")
 	}
 	source := valueSource{Topic: topic}
 	template = strings.TrimSpace(template)
@@ -234,7 +234,7 @@ func readValueSource(base, topic, template string, action bool) (valueSource, er
 		source.ZigbeeAction = match != nil
 	}
 	if match == nil {
-		return valueSource{}, unsupportedTemplate
+		return valueSource{}, errUnsupportedTemplate
 	}
 	for _, field := range match[1:] {
 		if field != "" {
@@ -242,7 +242,7 @@ func readValueSource(base, topic, template string, action bool) (valueSource, er
 		}
 	}
 	if guard != nil && guard[1] != source.Field {
-		return valueSource{}, unsupportedTemplate
+		return valueSource{}, errUnsupportedTemplate
 	}
 	return source, nil
 }

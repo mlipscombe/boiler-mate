@@ -40,57 +40,57 @@ func defaultSettings() Settings {
 
 func (s Settings) validate() error {
 	if len(s.DiscoveryPrefix) > 128 || !prefixPattern.MatchString(s.DiscoveryPrefix) {
-		return errors.New("Enter a valid MQTT discovery prefix.")
+		return errors.New("enter a valid MQTT discovery prefix")
 	}
 	if s.DropoutSeconds < 5 || s.DropoutSeconds > 86400 {
-		return errors.New("Set thermostat dropout grace between 5 and 86400 seconds.")
+		return errors.New("set thermostat dropout grace between 5 and 86400 seconds")
 	}
 	if s.MinCycleSeconds < 30 || s.MinCycleSeconds > 86400 {
-		return errors.New("Set the minimum cycle interval between 30 and 86400 seconds.")
+		return errors.New("set the minimum cycle interval between 30 and 86400 seconds")
 	}
 	if s.SensorTimeout < 10 || s.SensorTimeout > 86400 {
-		return errors.New("Set outdoor sensor timeout between 10 and 86400 seconds.")
+		return errors.New("set outdoor sensor timeout between 10 and 86400 seconds")
 	}
 	if s.Unit != "C" && s.Unit != "F" {
-		return errors.New("Choose Celsius or Fahrenheit.")
+		return errors.New("choose Celsius or Fahrenheit")
 	}
 	if s.RestartDelta <= 0 || s.RestartDelta > 50 {
-		return errors.New("Set a restart differential greater than 0 and at most 50 degrees.")
+		return errors.New("set a restart differential greater than 0 and at most 50 degrees")
 	}
 	if s.StopAt != nil && !s.validTemperature(*s.StopAt) {
-		return errors.New("The outdoor cutoff temperature is out of range.")
+		return errors.New("the outdoor cutoff temperature is out of range")
 	}
 	if (s.StopAt != nil || len(s.Bands) > 0) && s.OutdoorSensor == "" {
-		return errors.New("Choose an outdoor sensor to use the cutoff or maximum-power bands.")
+		return errors.New("choose an outdoor sensor to use the cutoff or maximum-power bands")
 	}
 	if s.Enabled && len(s.Thermostats) == 0 && s.StopAt == nil && len(s.Bands) == 0 {
-		return errors.New("Choose at least one thermostat, an outdoor cutoff, or a maximum-power band.")
+		return errors.New("choose at least one thermostat, an outdoor cutoff, or a maximum-power band")
 	}
 	if len(s.Thermostats) > 16 || len(s.Bands) > 16 {
-		return errors.New("Select at most 16 thermostats and enter at most 16 maximum-power bands.")
+		return errors.New("select at most 16 thermostats and enter at most 16 maximum-power bands")
 	}
 	seen := make(map[string]bool)
 	for _, id := range s.Thermostats {
 		if !s.validSource(id, "climate") || seen[id] {
-			return errors.New("Choose distinct thermostats from MQTT discovery.")
+			return errors.New("choose distinct thermostats from MQTT discovery")
 		}
 		seen[id] = true
 	}
 	if s.OutdoorSensor != "" && !s.validSource(s.OutdoorSensor, "sensor") {
-		return errors.New("Choose an outdoor temperature sensor from MQTT discovery.")
+		return errors.New("choose an outdoor temperature sensor from MQTT discovery")
 	}
 	for i, band := range s.Bands {
 		if band.MaxPower < 1 || band.MaxPower > 100 {
-			return errors.New("Enter each maximum power as a whole percentage from 1 to 100.")
+			return errors.New("enter each maximum power as a whole percentage from 1 to 100")
 		}
 		if i == 0 {
 			if band.From != nil {
-				return errors.New("The first band covers temperatures below the next band and must have no starting temperature.")
+				return errors.New("the first band covers temperatures below the next band and must have no starting temperature")
 			}
 			continue
 		}
 		if band.From == nil || !s.validTemperature(*band.From) || (i > 1 && *band.From <= *s.Bands[i-1].From) {
-			return errors.New("Enter each band's starting temperature in strictly increasing order.")
+			return errors.New("enter each band's starting temperature in strictly increasing order")
 		}
 	}
 	return nil
@@ -159,7 +159,7 @@ func save(path string, state savedState) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(file.Name())
+	defer func() { _ = os.Remove(file.Name()) }()
 	_, writeErr := file.Write(data)
 	if err := errors.Join(writeErr, file.Close()); err != nil {
 		return err
