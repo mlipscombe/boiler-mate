@@ -51,6 +51,7 @@ type Control struct {
 	missingSince   map[string]time.Time
 	seenThermostat bool
 	idleSince      time.Time
+	mqttEpoch      uint64
 
 	cutoff                 bool
 	band                   int
@@ -199,6 +200,7 @@ func (c *Control) Receive(topic string, payload []byte, retained bool) {
 func (c *Control) Disconnected() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.mqttEpoch++
 	clear(c.discovery)
 	clear(c.zwaveDevices)
 	clear(c.zwaveGateways)

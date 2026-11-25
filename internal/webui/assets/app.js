@@ -4,6 +4,7 @@ const navigation = [
   ['Monitor', [
     ['overview', 'Overview', '◈'], ['live-data', 'Live data', '◉'],
     ['charts', 'Charts', '∿'], ['consumption', 'Consumption', '▥'],
+    ['efficiency', 'Efficiency', '↗'],
     ['events', 'Events', '☷'],
   ]],
   ['Controller', [
@@ -1263,6 +1264,51 @@ function timerEditor(group,fields,canEdit,reload) {
     dom('div',{class:'table-scroll'},table),dom('div',{class:'toolbar'},canEdit()&&apply,errorList));
 }
 
+function efficiencyPage(token) {
+  const content=dom('div',{class:'stack','aria-live':'polite'},empty('Loading observations…'));
+  main.replaceChildren(heading('Efficiency suggestions',
+    'Review repeated patterns in burner runs, thermostat demand, and temperature regulation.'),content);
+  let lastRequest=0;
+  async function load() {
+    const request=++lastRequest;
+    try {
+      const report=await api('efficiency');
+      if (token!==generation || request!==lastRequest) return;
+      const last=report.lastSample && new Date(report.lastSample);
+      const fresh=last && Date.now()-last.valueOf()<5*60000;
+      const observed=report.heatDemandMinutes;
+      const duration=observed<60 ? observed+' min' : decimalTenths.format(observed/60)+' hr';
+      const stats=dom('section',{class:'efficiency-overview','aria-label':'Observation coverage'},
+        dom('div',{class:'efficiency-status'},dom('h2',{},'Last 7 days'),
+          pill(fresh?'Observing':last?'Awaiting fresh telemetry':'Waiting for observations',fresh?'good':'')),
+        dom('dl',{class:'efficiency-metrics'},[
+          ['Continuous heat demand observed',duration],
+          ['Firing runs observed',display(report.observedRuns)],
+          ['Latest observation',last?datetime.format(last):'—'],
+        ].map(([label,value])=>dom('div',{},dom('dt',{},label),dom('dd',{},value)))));
+      const suggestions=report.suggestions ?? [];
+      const results=suggestions.length ? suggestions.map(suggestion=>
+        dom('article',{class:'efficiency-suggestion'},
+          dom('div',{class:'efficiency-suggestion-head'},
+            dom('h2',{},suggestion.title),
+            dom('time',{datetime:suggestion.latest},datetime.format(new Date(suggestion.latest)))),
+          dom('p',{class:'efficiency-zones'},suggestion.zones),
+          dom('p',{},suggestion.summary),
+          dom('p',{class:'efficiency-review'},dom('strong',{},'What to check'),suggestion.review))) :
+        [card('Watching for repeat patterns',null,empty(observed>0 ?
+          'Boiler Mate needs repeat observations under similar conditions before suggesting a change.' :
+          'Boiler Mate needs a firing run and known heat demand from your selected thermostats.'),
+        observed===0 && dom('a',{class:'home-link',href:'#external-heating'},'View thermostat signals'))];
+      content.replaceChildren(stats, ...results,
+        dom('p',{class:'muted'},'Suggestions are advisory. Boiler Mate uses comparable space-heating observations and leaves controller settings to you.'));
+    } catch (error) {
+      if (token===generation && request===lastRequest) content.replaceChildren(empty(error.message));
+    }
+  }
+  refreshPageHistory=load;
+  load();
+}
+
 function helpPage() {
   const faqs=[
     ['Where do readings come from?','Boiler Mate reads one NBE controller directly over your local network. A controller can omit signals for optional hardware.'],
@@ -1301,6 +1347,7 @@ function renderPage() {
   else if (page==='overview') overview(token);
   else if (page==='charts') charts(token);
   else if (page==='consumption') consumption(section,token);
+  else if (page==='efficiency') efficiencyPage(token);
   else if (page==='events') activity(token,hashPage==='messages'?'notices':'',hashPage==='notifications'||requestedSection==='notifications');
   else if (page==='external-heating') externalHeatingPage(token);
   else helpPage();

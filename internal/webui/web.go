@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/mlipscombe/boiler-mate/internal/controllerread"
+	"github.com/mlipscombe/boiler-mate/internal/efficiency"
 	"github.com/mlipscombe/boiler-mate/internal/heating"
 	"github.com/mlipscombe/boiler-mate/nbe"
 )
@@ -49,6 +50,7 @@ type UI struct {
 	push                     *webPush
 	outdoorWeatherFahrenheit bool
 	heating                  *heating.Control
+	efficiencySession        int64
 
 	settingsMu   sync.Mutex
 	mu           sync.RWMutex
@@ -62,6 +64,7 @@ type UI struct {
 	lastState    string
 	lastInfo     string
 	offline      bool
+	efficiency   efficiency.Report
 }
 
 type snapshot struct {
@@ -89,6 +92,7 @@ func New(ctx context.Context, logger *slog.Logger, boiler controller, serial, da
 		push:                     push,
 		outdoorWeatherFahrenheit: options.OutdoorWeatherFahrenheit,
 		heating:                  options.Heating,
+		efficiencySession:        time.Now().UnixNano(),
 		snapshots:                make(map[string]snapshot), lastSample: make(map[string]time.Time),
 		changed: make(chan struct{}), eventChanged: make(chan struct{}),
 	}, nil
@@ -158,12 +162,16 @@ func (ui *UI) Observe(ctx context.Context, topic string, values map[string]any) 
 	if state != "" {
 		ui.addEvent(ctx, now, kind, state)
 	}
+	if topic == "operating_data" {
+		ui.recordEfficiency(ctx, now, values)
+	}
 }
 
 // Run records controller notices, delivers web push, and maintains local history.
 func (ui *UI) Run(ctx context.Context) {
 	var workers sync.WaitGroup
 	workers.Go(func() { ui.runWebPush(ctx) })
+	workers.Go(func() { ui.runEfficiency(ctx) })
 	defer workers.Wait()
 
 	ticker := time.NewTicker(15 * time.Second)
@@ -232,6 +240,7 @@ func (ui *UI) Handler() http.Handler {
 	router.HandleFunc("GET /api/history/combustion", ui.performanceHistoryHandler(true))
 	router.HandleFunc("GET /api/history/performance", ui.performanceHistoryHandler(false))
 	router.HandleFunc("GET /api/consumption", ui.getConsumption)
+	router.HandleFunc("GET /api/efficiency", ui.getEfficiency)
 	router.HandleFunc("GET /api/events", ui.getEvents)
 	router.HandleFunc("GET /api/controller/{kind}", ui.getControllerRead)
 	router.HandleFunc("GET /api/notifications", ui.getNotices)

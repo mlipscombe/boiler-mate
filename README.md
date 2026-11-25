@@ -71,6 +71,12 @@ The page also discovers thermostats directly from a Z-Wave JS UI gateway using n
 
 Room and outdoor readings are shown in the page's selected unit. For thermostats that omit the unit from their MQTT data, set `BOILER_MATE_MQTT_THERMOSTAT_UNIT` to `C` (default) or `F` to match the readings they publish. New installations also use that unit as the initial display preference.
 
+### Efficiency suggestions
+
+Open **Monitor → Efficiency** to see what Boiler Mate has observed over the last seven days. Select the thermostats you want it to follow under **External heating**. Automatic control can be off while suggestions are collected.
+
+Boiler Mate looks for repeated short burns that reach the boiler’s temperature stop while the same loops still call, oscillation during steady firing with usable P and I readings, and repeated runs that stay below target at the controller’s maximum output. Suggestions show the calling loops, measured evidence, and what to check. Startup, hot-water priority, signal gaps, and changes in operating conditions can interrupt an observation. Suggestions are advisory and require no controller writes.
+
 ### Controller reads in the dashboard and MQTT
 
 Open **Charts → Controller history** for chart IDs stored by the boiler, **Events → Controller log** for its event log, **Live data → Selected readings** for a one-time group of operating values, or **System → Firmware versions / Wireless sensors** for controller lists. Firmware and hardware determine which reads succeed. Chart IDs have controller-specific meanings.

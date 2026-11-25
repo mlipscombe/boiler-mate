@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mlipscombe/boiler-mate/internal/efficiency"
 	"github.com/mlipscombe/boiler-mate/nbe"
 	_ "modernc.org/sqlite"
 )
@@ -71,6 +72,12 @@ func openStore(ctx context.Context, dir string) (*store, error) {
 			message TEXT NOT NULL,
 			seen INTEGER NOT NULL DEFAULT 0
 		);
+		CREATE TABLE IF NOT EXISTS efficiency_samples (
+			serial TEXT NOT NULL,
+			time INTEGER NOT NULL,
+			observation BLOB NOT NULL,
+			PRIMARY KEY(serial, time)
+		) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS push_keys (
 			id INTEGER PRIMARY KEY CHECK (id = 1),
 			private_key TEXT NOT NULL,
@@ -225,6 +232,9 @@ func (s *store) prune(ctx context.Context, now time.Time) error {
 			(period = 60 AND time < ?) OR
 			(period = 3600 AND time < ?)
 	`, now.AddDate(0, 0, -30).Unix(), now.AddDate(-1, 0, 0).Unix())
+	if err == nil {
+		_, err = s.db.ExecContext(ctx, "DELETE FROM efficiency_samples WHERE time < ?", now.Add(-efficiency.Lookback).UnixMilli())
+	}
 	return err
 }
 

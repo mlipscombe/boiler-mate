@@ -7,12 +7,15 @@ import (
 )
 
 type input struct {
-	spec         inputSpec
-	availability []string
-	latest       string
-	at           time.Time
-	action       string
-	celsius      float64
+	spec           inputSpec
+	availability   []string
+	latest         string
+	at             time.Time
+	action         string
+	actionAt       time.Time
+	actionLive     bool
+	actionSourceAt time.Time
+	celsius        float64
 }
 
 func newInput(spec inputSpec) *input {
@@ -67,6 +70,8 @@ func (in *input) receive(topic string, payload []byte, retained bool, now time.T
 	current := in.availabilityState()
 	if previous != "offline" && current == "offline" {
 		in.at, in.action = time.Time{}, ""
+		in.actionAt, in.actionLive = time.Time{}, false
+		in.actionSourceAt = time.Time{}
 	}
 	if retained && current == "offline" {
 		return
@@ -80,6 +85,18 @@ func (in *input) receive(topic string, payload []byte, retained bool, now time.T
 					state, valid = zwaveAction(value)
 				}
 				if valid {
+					if state != in.action || !retained {
+						in.actionAt, in.actionLive = now, !retained
+						if in.spec.ZWave {
+							var report struct {
+								Time int64 `json:"time"`
+							}
+							in.actionSourceAt = time.Time{}
+							if json.Unmarshal(payload, &report) == nil && report.Time >= 1_000_000_000_000 {
+								in.actionSourceAt = time.UnixMilli(report.Time)
+							}
+						}
+					}
 					in.action = state
 				}
 			}
