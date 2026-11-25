@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"slices"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/mlipscombe/boiler-mate/nbe"
@@ -74,37 +75,45 @@ func (publish pollPublisherFunc) PublishMany(topic string, values map[string]any
 }
 
 func TestControllerAvailabilityFollowsOperatingPolls(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	synctest.Test(t, testControllerAvailability)
+}
+
+func testControllerAvailability(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	attempt := 0
 	read := pollReaderFunc(func() (*nbe.NBEResponse, error) {
 		attempt++
 		switch attempt {
-		case 1, 4, 5:
+		case 1, 4, 7, 9, 11:
 			return nil, errors.New("controller did not respond")
-		case 2:
+		case 2, 5, 8, 10:
 			return &nbe.NBEResponse{}, nil
-		case 3, 6:
+		case 3, 6, 12:
 			return &nbe.NBEResponse{Payload: map[string]any{"state": int64(13)}}, nil
 		default:
 			t.Fatal("unexpected poll after recovery")
 			return nil, nil
 		}
 	})
-	var statuses []string
+	type transition struct {
+		attempt int
+		status  string
+	}
+	var statuses []transition
 	publish := pollPublisherFunc(func(topic string, values map[string]any) error {
 		if topic == "device" {
-			statuses = append(statuses, values["controller_status"].(string))
-			if attempt == 6 {
+			statuses = append(statuses, transition{attempt, values["controller_status"].(string)})
+			if attempt == 12 {
 				cancel()
 			}
 		}
 		return nil
 	})
-	task := poll{nbe.GetOperatingDataFunction, "*", "operating_data", time.Millisecond}
+	task := poll{function: nbe.GetOperatingDataFunction, path: "*", topic: "operating_data", interval: 5 * time.Second}
 	gauges := &metricSet{registry: prometheus.NewRegistry(), gauges: make(map[string]metric)}
 	runPoll(ctx, slog.Default(), read, publish, gauges, task, nil, nil)
-	if want := []string{"offline", "online", "offline", "online"}; !slices.Equal(statuses, want) {
+	if want := []transition{{1, "offline"}, {3, "online"}, {10, "offline"}, {12, "online"}}; !slices.Equal(statuses, want) {
 		t.Errorf("controller availability = %v, want %v", statuses, want)
 	}
 }

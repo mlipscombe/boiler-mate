@@ -44,6 +44,7 @@ type poll struct {
 	path     string
 	topic    string
 	interval time.Duration
+	offset   time.Duration
 }
 
 // Observer receives successful snapshots, including values that have not changed.
@@ -51,12 +52,19 @@ type Observer func(topic string, values map[string]any)
 
 // Run polls the controller until ctx is cancelled and waits for all pollers to stop.
 func Run(ctx context.Context, logger *slog.Logger, boiler reader, mqtt publisher, registry prometheus.Registerer, serial string, observe Observer, ready func()) {
+	const telemetryInterval = 5 * time.Second
+	const settingsInterval = 2 * telemetryInterval
 	polls := []poll{
-		{nbe.GetOperatingDataFunction, "*", "operating_data", 5 * time.Second},
-		{nbe.GetAdvancedDataFunction, "*", "advanced_data", 5 * time.Second},
+		{nbe.GetOperatingDataFunction, "*", "operating_data", telemetryInterval, 0},
+		{nbe.GetAdvancedDataFunction, "*", "advanced_data", telemetryInterval, telemetryInterval / 2},
 	}
-	for _, category := range nbe.Settings {
-		polls = append(polls, poll{nbe.GetSetupFunction, category + ".*", category, 10 * time.Second})
+	// Each settings cycle has four gaps between telemetry reads. Spread the
+	// settings requests through those gaps so they don't arrive in one UDP burst.
+	settingsPerGap := (len(nbe.Settings) + 3) / 4
+	spacing := telemetryInterval / 2 / time.Duration(settingsPerGap+1)
+	for i, category := range nbe.Settings {
+		offset := time.Duration(i%4)*(telemetryInterval/2) + time.Duration(i/4+1)*spacing
+		polls = append(polls, poll{nbe.GetSetupFunction, category + ".*", category, settingsInterval, offset})
 	}
 
 	gauges := &metricSet{registry: registry, serial: serial, gauges: make(map[string]metric)}
@@ -70,10 +78,18 @@ func Run(ctx context.Context, logger *slog.Logger, boiler reader, mqtt publisher
 }
 
 func runPoll(ctx context.Context, logger *slog.Logger, boiler reader, mqtt publisher, gauges *metricSet, task poll, observe Observer, ready func()) {
+	if task.offset > 0 {
+		select {
+		case <-time.After(task.offset):
+		case <-ctx.Done():
+			return
+		}
+	}
 	cache := make(map[string]any)
 	ticker := time.NewTicker(task.interval)
 	defer ticker.Stop()
 	operating := task.function == nbe.GetOperatingDataFunction
+	var lastOperatingData time.Time
 	var controllerStatus string
 	publishStatus := func(status string) {
 		if !operating || status == controllerStatus {
@@ -90,12 +106,17 @@ func runPoll(ctx context.Context, logger *slog.Logger, boiler reader, mqtt publi
 		if ctx.Err() != nil {
 			return
 		}
-		if err != nil {
-			logger.Debug("Controller poll failed", "topic", task.topic, "error", err)
-			publishStatus("offline")
-		} else if len(response.Payload) > 0 {
+		if err != nil || len(response.Payload) == 0 {
+			if err != nil {
+				logger.Debug("Controller poll failed", "topic", task.topic, "error", err)
+			}
+			if operating && (lastOperatingData.IsZero() || time.Since(lastOperatingData) >= 20*time.Second) {
+				publishStatus("offline")
+			}
+		} else {
 			values := response.Payload
 			if operating {
+				lastOperatingData = time.Now()
 				values = withOperatingState(values)
 			}
 			if observe != nil {
@@ -118,8 +139,6 @@ func runPoll(ctx context.Context, logger *slog.Logger, boiler reader, mqtt publi
 					ready = nil
 				}
 			}
-		} else {
-			publishStatus("offline")
 		}
 
 		select {

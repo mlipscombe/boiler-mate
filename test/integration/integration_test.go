@@ -163,7 +163,7 @@ func verifyBridge(t *testing.T, enableWrites bool) {
 			if message.Topic() != controllerStatus || string(message.Payload()) != "offline" {
 				t.Fatalf("unexpected availability after controller loss: %s: %q", message.Topic(), message.Payload())
 			}
-		case <-time.After(10 * time.Second):
+		case <-time.After(28 * time.Second):
 			t.Fatal("controller loss did not publish offline status")
 		}
 	}
