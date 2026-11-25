@@ -275,10 +275,8 @@ func (s *store) queryEvents(ctx context.Context, query string, args ...any) ([]e
 		if err := rows.Scan(&row.ID, &row.Time, &row.Kind, &row.Message, &row.Read); err != nil {
 			return nil, err
 		}
-		if code, ok := strings.CutPrefix(row.Message, infoCodePrefix); ok && row.Kind == "info" {
-			if message := infoMessage(code); message != code {
-				row.Message = message
-			}
+		if row.Kind == "info" {
+			row.Message = infoMessage(row.Message)
 		}
 		events = append(events, row)
 	}

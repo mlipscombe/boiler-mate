@@ -216,21 +216,6 @@ func (ui *UI) pollNotices(ctx context.Context, now time.Time) {
 	}
 }
 
-const infoCodePrefix = "Controller information code "
-
-func infoMessage(info string) string {
-	if id, err := strconv.Atoi(info); err == nil {
-		switch id {
-		case 13:
-			return "Hopper content is below the controller minimum."
-		case 16:
-			return "Startup offset applied to the oxygen target."
-		}
-		return infoCodePrefix + strconv.Itoa(id)
-	}
-	return info
-}
-
 func (ui *UI) addEvent(ctx context.Context, at time.Time, kind, message string) {
 	if err := ui.store.addEvent(ctx, at, kind, message); err == nil {
 		ui.signalEventChange()

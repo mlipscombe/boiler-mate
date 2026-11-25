@@ -108,4 +108,15 @@ var PowerStates = []string{
 	"Overheat/auger disconnected",
 	"Stopped by cascade",
 	"Compressor failure",
+	// Newer operating states from StokerCloud's state_* translations.
+	36: "High backpressure alarm. Check the boiler and chimney.",
+	37: "Airflow error. The target could not be reached.",
+	38: "Outlet temperature is too high.",
+	39: "The ash box is disconnected.",
+	40: "Calibrating airflow",
+	41: "Boiler draft error.",
+	42: "Oxygen sensor error.",
+	43: "Compressor cleaning",
+	44: "Ignition failed.",
+	45: "The condensate collector is full.",
 }

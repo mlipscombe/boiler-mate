@@ -42,6 +42,10 @@ func TestOperatingState(t *testing.T) {
 		{8, "Temperature error boiler", "None"},
 		{13, "Fault ignition", "None"},
 		{18, "Unknown (18)", "None"},
+		{35, "Unknown (35)", "None"},
+		{36, "High backpressure alarm. Check the boiler and chimney.", "None"},
+		{40, "Calibrating airflow", "None"},
+		{45, "The condensate collector is full.", "None"},
 		{-1, "Unknown (-1)", "None"},
 		{200, "Unknown (200)", "None"},
 	} {

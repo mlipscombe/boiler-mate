@@ -349,20 +349,32 @@ func TestUnifiedEventFilters(t *testing.T) {
 	}
 }
 
-func TestStartupOxygenInformationEvent(t *testing.T) {
+func TestControllerInformationEvents(t *testing.T) {
 	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ui.Close() })
 
+	const startup = "Startup offset applied to the oxygen target."
+	const noLight = "The photo sensor detected no light for more than two minutes."
 	const legacy = "Controller information code 16"
-	const want = "Startup offset applied to the oxygen target."
-	if message := infoMessage("16"); message != want {
-		t.Fatalf("new information event: got %q, want %q", message, want)
+	const unknown = "Controller information code 54"
+	for _, check := range []struct{ raw, want string }{
+		{"16", startup},
+		{"16, 4", startup + " · " + noLight},
+		{"54,4", unknown + " · " + noLight},
+		{unknown, unknown},
+		{"Controller is ready", "Controller is ready"},
+	} {
+		if message := infoMessage(check.raw); message != check.want {
+			t.Errorf("infoMessage(%q) = %q, want %q", check.raw, message, check.want)
+		}
 	}
-	for _, kind := range []string{"info", "alarm"} {
-		if err := ui.store.addEvent(t.Context(), time.Now(), kind, legacy); err != nil {
+	for _, entry := range []struct{ kind, message string }{
+		{"info", legacy}, {"info", "16,4"}, {"alarm", legacy},
+	} {
+		if err := ui.store.addEvent(t.Context(), time.Now(), entry.kind, entry.message); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -373,7 +385,7 @@ func TestStartupOxygenInformationEvent(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &rows); err != nil || response.Code != http.StatusOK {
 		t.Fatalf("status %d, body %s, error %v", response.Code, response.Body.String(), err)
 	}
-	if len(rows) != 2 || rows[0].Message != legacy || rows[1].Message != want {
+	if len(rows) != 3 || rows[0].Message != legacy || rows[1].Message != startup+" · "+noLight || rows[2].Message != startup {
 		t.Fatalf("incorrect event messages: %+v", rows)
 	}
 }
