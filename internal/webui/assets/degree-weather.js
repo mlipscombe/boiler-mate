@@ -80,9 +80,9 @@ function degreeWeatherPage(token) {
           dateFormat.format(new Date(row.from))+(row.complete?'':' · so far'),
           row.coverage?decimalTenths.format(row.degreeHours):null,
           row.coverage?decimalTenths.format(row.degreeDays):null,
-          Math.round(row.coverage*100)+'%',
+          numeric.format(row.coverage*100)+'%',
           sources[row.source],
-          row.usedKg,Math.round(row.fuelCoverage*100)+'%',row.kgPerDegreeDay,
+          row.usedKg,numeric.format(row.fuelCoverage*100)+'%',row.kgPerDegreeDay,
           row.cost==null?null:money.format(row.cost),
           row.costPerDegreeDay==null?null:money.format(row.costPerDegreeDay),
           row.brand || (row.mixedBrands?'Mixed':null),
@@ -91,13 +91,14 @@ function degreeWeatherPage(token) {
         'Includes completed periods attributed to one brand by the purchase ledger.',
         readTable(['Brand','Periods','Pellets (kg)','Equivalent days','kg per degree day'],
           report.brands.map(row=>[row.name,row.periods,row.usedKg,row.degreeDays,row.kgPerDegreeDay]),'')):null;
-      output.replaceChildren(
+      output.replaceChildren(...[
         (weatherTrend || fuelTrend) && dom('div',{class:weatherTrend && fuelTrend?'grid split':'stack'},weatherTrend,fuelTrend),
         card('Weather and pellet history',
           'Base '+display(report.base)+' '+degreeUnit+'. Equivalent days are the observed degree hours divided by 24.',
           history,
           dom('p',{class:'muted'},'Fuel comparisons use completed periods with at least 95% overlap between weather and pellet readings. Pellet use includes any hot-water production. Brand attribution follows purchase order.')),
-        brands);
+        brands,
+      ].filter(Boolean));
     } catch(error) {
       if (token===generation && request===lastRequest) output.replaceChildren(empty(error.message));
     }
