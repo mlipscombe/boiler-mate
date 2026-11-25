@@ -66,6 +66,8 @@ func pushKind(kind string) int {
 		return 2
 	case "connection":
 		return 4
+	case "fuel":
+		return 8
 	default:
 		return 0
 	}
@@ -186,7 +188,7 @@ func (s *store) duePushSubscriptions(ctx context.Context, now time.Time) ([]push
 		SELECT id, endpoint, auth, p256dh, kinds, cursor, version, failures
 		FROM push_subscriptions
 		WHERE retry_at <= ? AND EXISTS (
-			SELECT 1 FROM events WHERE id > cursor AND seen = 0 AND kind IN ('alarm', 'info', 'connection')
+			SELECT 1 FROM events WHERE id > cursor AND seen = 0 AND kind IN ('alarm', 'info', 'connection', 'fuel')
 		)
 	`, now.Unix())
 	if err != nil {

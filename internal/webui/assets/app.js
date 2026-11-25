@@ -35,6 +35,7 @@ const readingAliases = {
 };
 const combustionReadings = new Set(['oxygen','oxygen_ref','o2_setpoint','corr_low','corr_medium','corr_high','photo_level','smoke_temp']);
 const consumptionPeriods = [['hours','Hourly'],['days','Daily'],['months','Monthly'],['years','Yearly']];
+const consumptionSections = [...consumptionPeriods,['ledger','Purchase ledger']];
 const labels = {
   boiler_temp: ['Boiler temperature','°C'], boiler_ref: ['Boiler target temperature','°C'],
   smoke_temp: ['Chimney/smoke','°C'], return_temp: ['Boiler return','°C'], shaft_temp: ['Drop shaft','°C'],
@@ -101,7 +102,7 @@ let noticePoll = 0;
 let lastDesktopNotice = null;
 let pushSetup = null;
 let pushSubscription = null;
-let noticeFilter = saved('noticeFilter', ['alarm','info','connection']);
+let noticeFilter = saved('noticeFilter', ['alarm','info','connection','fuel']);
 let chosenSignals = saved('signals',['operating_data.boiler_temp','operating_data.boiler_ref']);
 const defaultOverviewReadings = ['operating_data.external_temp','operating_data.air_flow'];
 let chosenMetrics = saved('metrics',defaultOverviewReadings)
@@ -305,8 +306,10 @@ function updateOverview() {
   ].filter(Boolean) : [];
   const water = signal('operating_data.dhw_temp');
   const returnTemp = signal('operating_data.return_temp');
+  const used = signal('advanced_data.total_consumption_24hours');
   const readings = [
-    ['Fuel hopper',remaining!=null&&remaining<0 ? 'Below minimum' : withUnit(remaining,'kg'),withUnit(signal('advanced_data.total_consumption_24hours'),'kg')+' used in 24 h','#fuel'],
+    ['Fuel hopper',remaining!=null&&remaining<0 ? 'Below minimum' : withUnit(remaining,'kg'),
+      used==null ? '24 h usage unavailable' : withUnit(used,'kg')+' used in 24 h','#fuel'],
     ['Boiler',withUnit(output,'kW'),withUnit(powerPercent,'%')+' burner output','#boiler'],
     ['Heating circuit',withUnit(returnTemp,'°C'),'Return water','#weather'],
     ['DHW',water==null?'No reading':withUnit(water,'°C'),'Cylinder sensor','#hot-water'],
@@ -770,7 +773,7 @@ function downloadCSV(data) {
 
 function consumption(period,token) {
   const output=dom('div',{},empty('Reading consumption from the controller…'));
-  const selector=renderSections('consumption',consumptionPeriods,period,'Consumption period');
+  const selector=renderSections('consumption',consumptionSections,period,'Consumption sections');
   const load=async()=>{
     output.replaceChildren(empty('Reading consumption from the controller…'));
     try {
@@ -807,7 +810,7 @@ function consumptionTable(data) {
 function eventList(rows,onRead) {
   if(!rows.length)return empty('No events to show.');
   return dom('ul',{class:'notice-list'},rows.map(row=>dom('li',{},
-    pill(textLabel(row.kind),row.kind==='alarm'?'error':row.kind==='connection'?'warn':''),
+    pill(textLabel(row.kind),row.kind==='alarm'?'error':['connection','fuel'].includes(row.kind)?'warn':''),
     dom('div',{},dom('strong',{},row.message),dom('small',{},datetime.format(new Date(row.time*1000)))),
     onRead&&!row.read&&row.kind!=='state'&&btn('Mark read',async event=>{
       const button=event.currentTarget;
@@ -825,7 +828,7 @@ function activity(token,initialFilter,notificationsOpen) {
   const entries=dom('div',{});
   const filter=dom('select',{'aria-label':'Filter events'},
     [['','All events'],['notices','Notices'],['unread','Unread notices'],['alarm','Alarms'],['info','Information'],
-      ['connection','Connection'],['state','State changes'],['command','Commands']]
+      ['connection','Connection'],['fuel','Pellet supply'],['state','State changes'],['command','Commands']]
       .map(([key,label])=>dom('option',{value:key,selected:key===initialFilter},label)));
   const more=btn('Load older',()=>load('older'));
   more.hidden=true;
@@ -952,7 +955,7 @@ function desktopNotifications(open) {
       desktop.disabled=desktopNoticesAllowed();
     }
   };
-  const options=[['alarm','Boiler alarms'],['info','Controller information'],['connection','Connection interruptions']];
+  const options=[['alarm','Boiler alarms'],['info','Controller information'],['connection','Connection interruptions'],['fuel','Pellet supply']];
   const inputs=dom('fieldset',{class:'signal-chooser','aria-label':'Desktop notice categories'},options.map(([kind,label])=>dom('label',{},
     dom('input',{type:'checkbox',checked:noticeFilter.includes(kind),onchange:async event=>{
       const checkbox=event.target;
@@ -1177,6 +1180,7 @@ function settingsPage(id,group,token) {
       catch(error){toast(error.message);}
     },'danger',{disabled:!editEnabled()}),
     id==='boiler'&&dom('a',{class:'primary',href:'#overview'},'Boiler controls'),
+    id==='fuel'&&dom('a',{class:'secondary',href:'#consumption/ledger'},'Pellet purchase ledger'),
     btn('Refresh readings',async()=>{await refresh();renderPage();}));
   main.replaceChildren(heading(title,description,actions),
     dom('div',{class:'stack'},
@@ -1336,7 +1340,7 @@ function renderPage() {
   const [hashPage,requestedSection]=window.location.hash.slice(1).split('/');
   const requested=({ 'advanced-data':'live-data', messages:'events', notifications:'events' })[hashPage]??hashPage;
   page=navigation.flatMap(([,items])=>items).some(([id])=>id===requested)?requested:'overview';
-  const sections=groups[page]?.[2] ?? (page==='consumption'?consumptionPeriods:[]);
+  const sections=groups[page]?.[2] ?? (page==='consumption'?consumptionSections:[]);
   const [section,sectionLabel]=sections.find(([id,,slug=id])=>slug===requestedSection) ?? sections[0] ?? [];
   const token=++generation;
   const readSection=controllerSections[page]?.slice(1).find(([kind])=>kind===requestedSection);
@@ -1346,7 +1350,10 @@ function renderPage() {
   else if (page==='live-data') readingsPage();
   else if (page==='overview') overview(token);
   else if (page==='charts') charts(token);
-  else if (page==='consumption') consumption(section,token);
+  else if (page==='consumption') {
+    if(section==='ledger')pelletLedgerPage(token);
+    else consumption(section,token);
+  }
   else if (page==='efficiency') efficiencyPage(token);
   else if (page==='events') activity(token,hashPage==='messages'?'notices':'',hashPage==='notifications'||requestedSection==='notifications');
   else if (page==='external-heating') externalHeatingPage(token);

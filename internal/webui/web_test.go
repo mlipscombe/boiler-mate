@@ -390,6 +390,76 @@ func TestControllerInformationEvents(t *testing.T) {
 	}
 }
 
+func TestFiringEventsExplainOutputAndSurviveRestart(t *testing.T) {
+	dir := t.TempDir()
+	open := func() *UI {
+		t.Helper()
+		ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", dir, Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ui.Close() })
+		return ui
+	}
+	ui := open()
+	if err := ui.store.addEvent(t.Context(), time.Now(), "state", "Power"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ui.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ui = open()
+	firing := map[string]any{"state_text": "Power", "power_pct": int64(90), "power_kw": nbe.RoundedFloat(36)}
+	ui.Observe(t.Context(), "operating_data", firing)
+	ui.Observe(t.Context(), "operating_data", map[string]any{"state_text": "Pause"})
+	ui.Observe(t.Context(), "operating_data", firing)
+	if err := ui.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ui = open()
+	ui.Observe(t.Context(), "operating_data", map[string]any{"state_text": "Power", "power_pct": int64(75)})
+	reply := requestJSON(t, ui, http.MethodGet, "/api/events?filter=state", nil, http.StatusOK)
+	var rows []event
+	if err := json.Unmarshal(reply.Body.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	var messages []string
+	for _, event := range rows {
+		messages = append(messages, event.Message)
+	}
+	want := []string{"Burner firing · 90% · 36.0 kW", "Pause", "Burner firing"}
+	if !slices.Equal(messages, want) {
+		t.Fatalf("got %v, want %v", messages, want)
+	}
+}
+
+func TestDashboardConvertsLiveAndStoredPelletReadings(t *testing.T) {
+	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ui.Close() })
+	values := map[string]any{"total_consumption_24hours": int64(39), "dhw_consumption_24hours": int64(2), "dhw_part_24hours": int64(5)}
+	ui.Observe(t.Context(), "advanced_data", values)
+	for _, streamed := range []bool{false, true} {
+		status, _ := ui.statusSnapshot(streamed)
+		readings := status.Data["advanced_data"].Values
+		if readings["total_consumption_24hours"] != 3.9 || readings["dhw_consumption_24hours"] != int64(2) ||
+			readings["dhw_part_24hours"] != int64(5) || values["total_consumption_24hours"] != int64(39) {
+			t.Fatalf("unexpected normalized readings: %v (source %v)", readings, values)
+		}
+	}
+	reply := requestJSON(t, ui, http.MethodGet, "/api/history?series=advanced_data.total_consumption_24hours", nil, http.StatusOK)
+	var data map[string][]point
+	if err := json.Unmarshal(reply.Body.Bytes(), &data); err != nil {
+		t.Fatal(err)
+	}
+	points := data["advanced_data.total_consumption_24hours"]
+	if len(points) != 1 || points[0].Value != 3.9 {
+		t.Fatalf("unexpected consumption history: %v", points)
+	}
+}
+
 func TestStatusStream(t *testing.T) {
 	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), Options{})
 	if err != nil {

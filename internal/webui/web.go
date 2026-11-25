@@ -77,6 +77,10 @@ func New(ctx context.Context, logger *slog.Logger, boiler controller, serial, da
 	if err != nil {
 		return nil, err
 	}
+	lastState, err := store.lastOperatingState(ctx)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("load last operating state: %w", err), store.db.Close())
+	}
 	push, err := newWebPush(ctx, store)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("initialize web push: %w", err), store.db.Close())
@@ -94,7 +98,7 @@ func New(ctx context.Context, logger *slog.Logger, boiler controller, serial, da
 		heating:                  options.Heating,
 		efficiencySession:        time.Now().UnixNano(),
 		snapshots:                make(map[string]snapshot), lastSample: make(map[string]time.Time),
-		changed: make(chan struct{}), eventChanged: make(chan struct{}),
+		changed: make(chan struct{}), eventChanged: make(chan struct{}), lastState: lastState,
 	}, nil
 }
 
@@ -160,7 +164,7 @@ func (ui *UI) Observe(ctx context.Context, topic string, values map[string]any) 
 		}
 	}
 	if state != "" {
-		ui.addEvent(ctx, now, kind, state)
+		ui.addEvent(ctx, now, kind, operatingStateMessage(state, values))
 	}
 	if topic == "operating_data" {
 		ui.recordEfficiency(ctx, now, values)
@@ -172,6 +176,7 @@ func (ui *UI) Run(ctx context.Context) {
 	var workers sync.WaitGroup
 	workers.Go(func() { ui.runWebPush(ctx) })
 	workers.Go(func() { ui.runEfficiency(ctx) })
+	workers.Go(func() { ui.runPelletCounter(ctx) })
 	defer workers.Wait()
 
 	ticker := time.NewTicker(15 * time.Second)
@@ -240,6 +245,10 @@ func (ui *UI) Handler() http.Handler {
 	router.HandleFunc("GET /api/history/combustion", ui.performanceHistoryHandler(true))
 	router.HandleFunc("GET /api/history/performance", ui.performanceHistoryHandler(false))
 	router.HandleFunc("GET /api/consumption", ui.getConsumption)
+	router.HandleFunc("GET /api/pellets", ui.getPelletLedger)
+	router.HandleFunc("PUT /api/pellets/purchases/{id}", ui.putPelletPurchase)
+	router.HandleFunc("DELETE /api/pellets/purchases/{id}", ui.deletePelletPurchase)
+	router.HandleFunc("PUT /api/pellets/settings", ui.putPelletSettings)
 	router.HandleFunc("GET /api/efficiency", ui.getEfficiency)
 	router.HandleFunc("GET /api/events", ui.getEvents)
 	router.HandleFunc("GET /api/controller/{kind}", ui.getControllerRead)
@@ -333,6 +342,11 @@ func (ui *UI) getHistory(w http.ResponseWriter, r *http.Request) {
 				points[i].Value = fahrenheitToCelsius(points[i].Value)
 			}
 		}
+		if key == "advanced_data."+pelletUse24Hours {
+			for i := range points {
+				points[i].Value = deciKilogramsToKg(points[i].Value)
+			}
+		}
 		series[key] = points
 	}
 	writeJSON(w, series)
@@ -340,6 +354,12 @@ func (ui *UI) getHistory(w http.ResponseWriter, r *http.Request) {
 
 func fahrenheitToCelsius(value float64) float64 {
 	return (value - 32) * 5 / 9
+}
+
+const pelletUse24Hours = "total_consumption_24hours"
+
+func deciKilogramsToKg(value float64) float64 {
+	return value / 10
 }
 
 func (ui *UI) performanceHistoryHandler(oxygenOnly bool) http.HandlerFunc {
@@ -360,7 +380,7 @@ func (ui *UI) performanceHistoryHandler(oxygenOnly bool) http.HandlerFunc {
 func (ui *UI) getEvents(w http.ResponseWriter, r *http.Request) {
 	filter := r.URL.Query().Get("filter")
 	switch filter {
-	case "", "notices", "unread", "alarm", "info", "connection", "state", "command":
+	case "", "notices", "unread", "alarm", "info", "connection", "fuel", "state", "command":
 		ui.listEvents(w, r, filter)
 	default:
 		problem(w, http.StatusBadRequest, "Unknown event filter.")

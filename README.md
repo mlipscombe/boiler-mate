@@ -54,6 +54,8 @@ Set `BOILER_MATE_OUTDOOR_WEATHER_FAHRENHEIT=true` when the online outdoor weathe
 
 Enable desktop notices under **Events → Desktop notifications** on each browser that should receive them. On browsers with Web Push, notices can arrive after the dashboard tab closes. The server needs outbound HTTPS to the browser's push service and sends encrypted notice payloads. The web data directory stores the push identity and subscriptions alongside dashboard history.
 
+Open **Consumption → Purchase ledger** to track pellets on hand and fuel cost. Enter the number bought, weight and price per bag, pallet, or other unit, and the brand if known. Each purchase can use pounds or kilograms. For opening stock, enter the weight currently on hand and leave its price blank if unknown. Cost reports use the oldest available stock first and count usage from the first successful controller counter reading. Configure a low-stock threshold in the ledger and enable **Pellet supply** under desktop notifications to receive the alert on that device.
+
 ### External heating
 
 Open **Controller → External heating** to configure automatic control. Pick one or more MQTT thermostats, an outdoor temperature sensor, or both. Save the settings and enable external heating control. Settings are stored in the dashboard data directory and continue to apply across restarts, including if you later turn off the dashboard. Controller writes and a PIN are required for automatic control.

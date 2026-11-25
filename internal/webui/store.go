@@ -94,7 +94,7 @@ func openStore(ctx context.Context, dir string) (*store, error) {
 			failures INTEGER NOT NULL DEFAULT 0,
 			retry_at INTEGER NOT NULL DEFAULT 0
 		);
-	`)
+	`+pelletSchema)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("initialize history: %w", err), db.Close())
 	}
@@ -243,6 +243,20 @@ func (s *store) addEvent(ctx context.Context, at time.Time, kind, message string
 	return err
 }
 
+func (s *store) lastOperatingState(ctx context.Context) (string, error) {
+	var message string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT message FROM events WHERE kind IN ('state', 'alarm') ORDER BY id DESC LIMIT 1
+	`).Scan(&message)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if message == burnerFiringMessage || strings.HasPrefix(message, burnerFiringMessage+" · ") {
+		message = controllerFiringState
+	}
+	return message, err
+}
+
 func (s *store) events(ctx context.Context, before int64, filter string) ([]event, error) {
 	return s.queryEvents(ctx, `
 		SELECT id, time, kind, message, seen
@@ -268,7 +282,7 @@ func (s *store) desktopNoticesAfter(ctx context.Context, after int64) ([]event, 
 	return s.queryEvents(ctx, `
 		SELECT id, time, kind, message, seen
 		FROM events
-		WHERE id > ? AND seen = 0 AND kind IN ('alarm', 'info', 'connection')
+		WHERE id > ? AND seen = 0 AND kind IN ('alarm', 'info', 'connection', 'fuel')
 		ORDER BY id LIMIT 150
 	`, after)
 }
@@ -287,6 +301,9 @@ func (s *store) queryEvents(ctx context.Context, query string, args ...any) ([]e
 		}
 		if row.Kind == "info" {
 			row.Message = infoMessage(row.Message)
+		}
+		if row.Kind == "state" && row.Message == controllerFiringState {
+			row.Message = burnerFiringMessage
 		}
 		events = append(events, row)
 	}

@@ -66,6 +66,13 @@ func (ui *UI) statusSnapshot(telemetryOnly bool) (dashboardStatus, <-chan struct
 			}
 		}
 	}
+	advanced := data["advanced_data"]
+	if value, ok := number(advanced.Values[pelletUse24Hours]); ok {
+		// The rolling total from advanced telemetry is in tenths of a kilogram.
+		advanced.Values = maps.Clone(advanced.Values)
+		advanced.Values[pelletUse24Hours] = deciKilogramsToKg(value)
+		data["advanced_data"] = advanced
+	}
 	latest := data["operating_data"].At
 	return dashboardStatus{
 		Serial: ui.serial, Data: data, Online: !latest.IsZero() && time.Since(latest) < 20*time.Second,

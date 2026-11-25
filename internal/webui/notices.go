@@ -1,11 +1,32 @@
 package webui
 
 import (
+	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
 
 const infoCodePrefix = "Controller information code "
+
+const (
+	controllerFiringState = "Power"
+	burnerFiringMessage   = "Burner firing"
+)
+
+func operatingStateMessage(state string, values map[string]any) string {
+	if state != controllerFiringState {
+		return state
+	}
+	parts := []string{burnerFiringMessage}
+	if percent, ok := number(values["power_pct"]); ok && percent >= 0 && percent <= 100 {
+		parts = append(parts, strconv.FormatFloat(percent, 'f', -1, 64)+"%")
+	}
+	if power, ok := number(values["power_kw"]); ok && power >= 0 && !math.IsInf(power, 0) {
+		parts = append(parts, fmt.Sprintf("%.1f kW", power))
+	}
+	return strings.Join(parts, " · ")
+}
 
 // Information IDs follow the lng_info_* entries in the StokerCloud translations.
 // https://stokercloud.dk/v3/assets/json/translation/uk.json

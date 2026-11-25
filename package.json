@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "build:css": "tailwindcss -i internal/webui/style.css -o internal/webui/assets/style.css --minify",
-    "check:js": "node --check internal/webui/assets/app.js && node --check internal/webui/assets/controller-reads.js && node --check internal/webui/assets/external-heating.js && node --check internal/webui/assets/notice-worker.js"
+    "check:js": "node --check internal/webui/assets/app.js && node --check internal/webui/assets/controller-reads.js && node --check internal/webui/assets/external-heating.js && node --check internal/webui/assets/pellets.js && node --check internal/webui/assets/notice-worker.js"
   },
   "devDependencies": {
     "@tailwindcss/cli": "4.3.5",
