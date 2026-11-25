@@ -49,6 +49,7 @@ func TestExternalHeatingWithMosquitto(t *testing.T) {
 	}
 	t.Cleanup(device.Stop)
 	discovery := "integration-heating/" + serial
+	broker.Path = "/" + discovery
 	action := discovery + "/inputs/heat"
 	availability := discovery + "/inputs/availability"
 	reading := discovery + "/inputs/outdoor"
@@ -171,6 +172,45 @@ func TestExternalHeatingWithMosquitto(t *testing.T) {
 		final, _ = read()
 		return final.BandPower != nil && *final.BandPower == 75 && device.WriteAttempts() == 2 &&
 			strings.Contains(final.PowerError, "controller rejected")
+	})
+
+	settings.Bands = nil
+	write(settings)
+	checkToken(t, peer.Publish(reading, 1, true, "16"))
+	waitHeating(t, "outdoor cutoff ending", func() bool {
+		state, ok := read()
+		return ok && !state.CutoffActive
+	})
+	post := func(path, payload string, want int) {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, "http://"+web+"/api/"+path, strings.NewReader(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Boiler-Mate", "1")
+		response, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = response.Body.Close() }()
+		if response.StatusCode != want {
+			body, _ := io.ReadAll(response.Body)
+			t.Fatalf("POST %s = %d %s, want %d", path, response.StatusCode, body, want)
+		}
+	}
+	post("power", `{"action":"stop"}`, http.StatusUnprocessableEntity)
+	if state, ok := read(); !ok || !state.ManualOff {
+		t.Fatal("dashboard Stop did not hold external control")
+	}
+	post("external-heating/resume", "", http.StatusOK)
+	if state, ok := read(); !ok || state.ManualOff {
+		t.Fatal("dashboard Resume did not release manual Off")
+	}
+	checkToken(t, peer.Publish(discovery+"/set/device/power_switch", 1, false, "OFF"))
+	waitHeating(t, "MQTT Off pausing external control", func() bool {
+		state, _ := read()
+		return state.ManualOff && device.WriteAttempts() == 4
 	})
 }
 

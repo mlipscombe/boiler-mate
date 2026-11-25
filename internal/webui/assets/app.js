@@ -40,7 +40,7 @@ const labels = {
   dhw_temp: ['DHW temperature','°C'], dhw_ref: ['DHW target temperature','°C'], dhw_valve_state: ['DHW output',''],
   oxygen: ['Oxygen','%'], oxygen_ref: ['Oxygen target','%'],
   corr_low: ['O2 low regulation','%'], corr_medium: ['O2 mid regulation','%'], corr_high: ['O2 high regulation','%'],
-  power_kw: ['Power output','kW'], power_pct: ['Power','%'], photo_level: ['Photo sensor (light)','lx'],
+  power_kw: ['Power output','kW'], power_pct: ['Power','%'], photo_level: ['Photo sensor (light)','%'],
   fan_speed: ['Fan speed','%'], internet_uptime: ['Online time','%'], flow1: ['Flow','L/h'],
   content: ['Pellets remaining','kg'], distance: ['Distance to pellets','cm'], pressure: ['Air pressure','bar'],
   auger_capacity: ['Auger capacity','g'], kw_min: ['Power 10%','kW'], kw_max: ['Power 100%','kW'],

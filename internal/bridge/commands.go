@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/mlipscombe/boiler-mate/internal/heating"
 	"github.com/mlipscombe/boiler-mate/mqtt"
 	"github.com/mlipscombe/boiler-mate/nbe"
 )
@@ -20,11 +21,12 @@ type command struct {
 	value  []byte
 	result chan error
 	check  func() error
+	manual *heating.Control
 }
 
 type commands chan command
 
-func (queue commands) subscribe(ctx context.Context, logger *slog.Logger, client *mqtt.Client, prefix string) error {
+func (queue commands) subscribe(ctx context.Context, logger *slog.Logger, client *mqtt.Client, prefix string, manual *heating.Control) error {
 	return client.Subscribe("set/+/+", 1, func(_ *mqtt.Client, message mqtt.Message) {
 		if ctx.Err() != nil || message.Retained() {
 			return
@@ -38,7 +40,7 @@ func (queue commands) subscribe(ctx context.Context, logger *slog.Logger, client
 			return
 		}
 		key, value := translatePower(group+"."+name, message.Payload())
-		if err := queue.enqueue(command{ctx: ctx, key: key, value: value}); err != nil {
+		if err := queue.enqueue(command{ctx: ctx, key: key, value: value, manual: manual}); err != nil {
 			logger.Warn("Ignored MQTT command", "error", err)
 		}
 	})
@@ -66,6 +68,7 @@ func (queue commands) enqueue(item command) error {
 		return errors.New("invalid controller command")
 	}
 	item.value = bytes.Clone(item.value)
+	item.holdBeforeStop()
 	select {
 	case queue <- item:
 		return nil
@@ -74,20 +77,30 @@ func (queue commands) enqueue(item command) error {
 	}
 }
 
-func (queue commands) write(ctx context.Context, key string, value []byte) error {
-	return queue.writeChecked(ctx, key, value, nil)
+func (item command) holdBeforeStop() {
+	if item.manual != nil && item.key == heating.Stop && string(item.value) == "1" {
+		item.manual.HoldManualStop()
+	}
+}
+
+func (queue commands) write(ctx context.Context, key string, value []byte, manual *heating.Control) error {
+	return queue.wait(command{ctx: ctx, key: key, value: value, manual: manual})
 }
 
 func (queue commands) writeChecked(ctx context.Context, key string, value []byte, check func() error) error {
-	item := command{ctx: ctx, key: key, value: value, result: make(chan error, 1), check: check}
+	return queue.wait(command{ctx: ctx, key: key, value: value, check: check})
+}
+
+func (queue commands) wait(item command) error {
+	item.result = make(chan error, 1)
 	if err := queue.enqueue(item); err != nil {
 		return err
 	}
 	select {
 	case err := <-item.result:
 		return err
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-item.ctx.Done():
+		return item.ctx.Err()
 	}
 }
 
@@ -106,7 +119,12 @@ func (queue commands) run(ctx context.Context, logger *slog.Logger, boiler *nbe.
 					continue
 				}
 			}
+			// A previously queued manual Start may have cleared the hold.
+			item.holdBeforeStop()
 			_, err := boiler.Set(item.ctx, item.key, item.value)
+			if err == nil && item.manual != nil && item.key == heating.Start && string(item.value) == "1" {
+				item.manual.ManualStartAccepted()
+			}
 			if item.result != nil {
 				item.result <- err
 			}

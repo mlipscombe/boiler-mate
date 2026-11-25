@@ -134,6 +134,9 @@ type savedState struct {
 	OutdoorResume bool      `json:"outdoorResume"`
 	LastPowerAt   time.Time `json:"lastPowerAt"`
 	LastPowerKey  string    `json:"lastPowerKey"`
+	ManualOff     bool      `json:"manualOff,omitempty"`
+	ObservedPower string    `json:"observedPower,omitempty"`
+	AutoStopAt    time.Time `json:"autoStopAt,omitempty"`
 }
 
 func load(path, serial string, defaults Settings) (savedState, error) {

@@ -37,3 +37,22 @@ func (ui *UI) putExternalHeating(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, ui.heating.Snapshot())
 }
+
+func (ui *UI) resumeExternalHeating(w http.ResponseWriter, _ *http.Request) {
+	if ui.heating == nil {
+		problem(w, http.StatusServiceUnavailable, "External heating control is unavailable.")
+		return
+	}
+	if err := ui.heating.Resume(); err != nil {
+		code := http.StatusConflict
+		switch {
+		case errors.Is(err, heating.ErrReadOnly):
+			code = http.StatusForbidden
+		case errors.Is(err, heating.ErrSave):
+			code = http.StatusInternalServerError
+		}
+		problem(w, code, err.Error())
+		return
+	}
+	writeJSON(w, ui.heating.Snapshot())
+}

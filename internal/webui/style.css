@@ -202,6 +202,9 @@
   .heating-state::before { @apply size-2 shrink-0 rounded-full bg-slate-300; content: ""; }
   .heating-state[data-state="active"]::before { @apply bg-emerald-300; }
   .heating-state[data-state="cutoff"]::before { @apply bg-amber-300; }
+  .heating-state[data-state="held"]::before { @apply bg-amber-300; }
+  .heating-summary-actions { @apply flex min-w-0 flex-wrap items-center gap-2; }
+  .heating-resume { @apply min-h-10 rounded-lg bg-white px-3 text-sm font-semibold text-ink hover:bg-blue-50 disabled:opacity-60 focus-visible:outline-white; }
   .heating-decision, .heating-readonly { @apply mt-1 text-sm leading-snug text-blue-100; }
   .heating-decision:empty { display: none; }
   .heating-readonly { @apply mx-4 mb-4 mt-0 sm:mx-5; }

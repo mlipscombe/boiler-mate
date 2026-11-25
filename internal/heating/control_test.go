@@ -188,7 +188,7 @@ func TestOutdoorOnlyResumesItsOwnStopAfterRestart(t *testing.T) {
 	restarted := New(filepath.Dir(c.path), "test", c.logger, Options{Write: c.write})
 	discover(restarted)
 	restarted.Receive("outside", []byte("17"), false)
-	restarted.boiler = "OFF"
+	restarted.Observe("operating_data", map[string]any{"state_on": "OFF"})
 	if got := nextAt(restarted, time.Now().Add(3*time.Minute)); got.key != Start {
 		t.Fatalf("outdoor cutoff release after restart = %+v, want start", got)
 	}

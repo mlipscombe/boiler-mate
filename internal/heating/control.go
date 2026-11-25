@@ -22,6 +22,7 @@ const (
 
 var ErrSuperseded = errors.New("external heating decision changed")
 var ErrReadOnly = errors.New("enable boiler writes and configure a controller PIN before enabling external heating control")
+var ErrDisabled = errors.New("enable external heating control before resuming it")
 
 type WriteFunc func(ctx context.Context, key string, value int, current func() bool) error
 
@@ -77,6 +78,7 @@ type InputStatus struct {
 type Status struct {
 	Settings           Settings      `json:"settings"`
 	Writable           bool          `json:"writable"`
+	ManualOff          bool          `json:"manualOff"`
 	Inputs             []InputStatus `json:"inputs"`
 	OutdoorTemperature *float64      `json:"outdoorTemperature"`
 	CutoffActive       bool          `json:"cutoffActive"`
@@ -282,6 +284,7 @@ func (c *Control) Observe(topic string, data map[string]any) {
 		c.boiler, _ = data["state_on"].(string)
 		c.boilerAt = time.Now()
 		c.powerConfirmed = c.powerConfirmed || c.LastPowerKey == Start && c.boiler == "ON" || c.LastPowerKey == Stop && c.boiler == "OFF"
+		c.observePower()
 	case "regulation":
 		minimum, hasMin := numeric(data["boiler_power_min"])
 		maximum, hasMax := numeric(data["boiler_power_max"])
@@ -362,7 +365,7 @@ func (c *Control) Snapshot() Status {
 
 func (c *Control) plan(now time.Time) (command, Status) {
 	s := c.Settings
-	status := Status{Settings: s, Writable: c.write != nil, Error: c.lastError, PowerError: c.capError}
+	status := Status{Settings: s, Writable: c.write != nil, ManualOff: c.ManualOff, Error: c.lastError, PowerError: c.capError}
 	celsius, tempKnown := c.active[s.OutdoorSensor].currentTemperature(now, time.Duration(s.SensorTimeout)*time.Second)
 	if tempKnown {
 		value := s.displayTemperature(celsius)
@@ -388,6 +391,10 @@ func (c *Control) plan(now time.Time) (command, Status) {
 	}
 	if c.write == nil {
 		status.Decision = "Boiler writes are disabled."
+		return command{}, status
+	}
+	if c.ManualOff {
+		status.Decision = "The boiler was stopped manually. Resume automatic control when you want it to follow heat demand again."
 		return command{}, status
 	}
 	desired, reason := c.desiredPower(now, status.CutoffActive, tempKnown)
@@ -512,8 +519,18 @@ func (c *Control) apply(ctx context.Context) {
 	err := c.write(ctx, cmd.key, cmd.value, func() bool {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		current, _ := c.plan(time.Now())
-		return current == cmd
+		now := time.Now()
+		current, _ := c.plan(now)
+		if current != cmd {
+			return false
+		}
+		if cmd.key == Stop {
+			// Record the stop before sending it. A telemetry read can see Off
+			// before the command reply arrives, including when the reply is lost.
+			c.AutoStopAt = now
+			c.savePowerState()
+		}
+		return true
 	})
 	if errors.Is(err, ErrSuperseded) || ctx.Err() != nil {
 		return
@@ -531,6 +548,11 @@ func (c *Control) apply(ctx context.Context) {
 		return
 	}
 	if err != nil {
+		var rejected *nbe.ResponseError
+		if cmd.key == Stop && !c.AutoStopAt.IsZero() && errors.As(err, &rejected) {
+			c.AutoStopAt = time.Time{}
+			c.savePowerState()
+		}
 		c.lastError = err.Error()
 		c.commandRetry = now.Add(30 * time.Second)
 		c.retryPowerKey = cmd.key
@@ -540,14 +562,12 @@ func (c *Control) apply(ctx context.Context) {
 	c.retryPowerKey = ""
 	c.LastPowerAt, c.LastPowerKey = now, cmd.key
 	c.powerConfirmed = false
-	if cmd.outdoorStop {
+	if cmd.outdoorStop && !c.ManualOff {
 		c.OutdoorResume = true
 	}
 	if cmd.key == Start {
 		c.OutdoorResume = false
+		c.AutoStopAt = time.Time{}
 	}
-	if err := save(c.path, c.savedState); err != nil {
-		c.logger.Warn("Could not save external heating command state", "error", err)
-		c.lastError = "The command succeeded, but its state could not be saved."
-	}
+	c.savePowerState()
 }

@@ -73,7 +73,9 @@ func Run(parent context.Context, cfg config.Config, logger *slog.Logger) error {
 		Write: writeHeating, DashboardReadings: cfg.WebBind != "false", ThermostatUnit: cfg.MQTTThermostatUnit,
 	})
 	watchHeating := cfg.WebBind != "false" || external.Enabled()
+	var manualHeating *heating.Control
 	if watchHeating {
+		manualHeating = external
 		watch := client.WatchTopics(func(_ *mqtt.Client, message mqtt.Message) {
 			external.Receive(message.Topic(), message.Payload(), message.Retained())
 		}, external.Disconnected)
@@ -83,7 +85,9 @@ func Run(parent context.Context, cfg config.Config, logger *slog.Logger) error {
 	if cfg.WebBind != "false" {
 		var write webui.WriteFunc
 		if writesEnabled {
-			write = queue.write
+			write = func(ctx context.Context, key string, value []byte) error {
+				return queue.write(ctx, key, value, manualHeating)
+			}
 		}
 		ui, err = webui.New(ctx, logger, boiler, boiler.Serial, cfg.WebData, webui.Options{
 			ReadController: reads.read, Write: write, OutdoorWeatherFahrenheit: cfg.OutdoorWeatherFahrenheit,
@@ -111,7 +115,7 @@ func Run(parent context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 	workers.Go(func() { reads.run(ctx) })
 	if writesEnabled {
-		if err := queue.subscribe(ctx, logger, client, prefix); err != nil {
+		if err := queue.subscribe(ctx, logger, client, prefix, manualHeating); err != nil {
 			return err
 		}
 		workers.Go(func() {

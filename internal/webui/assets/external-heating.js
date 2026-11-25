@@ -43,6 +43,22 @@ function externalHeatingForm(title, data, token) {
 
   const liveState = dom('span', {class:'heating-state'});
   const report = dom('p', {role:'status',class:'heating-decision'});
+  const resume = btn('Resume automatic control',async()=>{
+    if (!await confirmChange('Resume automatic control?',
+      'The boiler can start if a thermostat is calling for heat.', 'Resume control')) return;
+    resume.disabled=true;
+    try {
+      const next=await api('external-heating/resume',{method:'POST'});
+      if (token!==generation) return;
+      data=next;
+      show(next);
+      toast('Automatic heating control resumed.');
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      resume.disabled=false;
+    }
+  },'heating-resume',{hidden:true});
   const outdoorReading = dom('dd');
   const demandReading = dom('dd');
   const powerReading = dom('dd');
@@ -75,8 +91,11 @@ function externalHeatingForm(title, data, token) {
     const reporting = saved.filter(id=>discovered.get(id)?.action);
     const heating = reporting.filter(id=>discovered.get(id).action==='heating').length;
     const readout = discovered.get(currentSensor)?.temperature ?? (currentSensor && currentSensor===next.settings.outdoorSensor ? next.outdoorTemperature : null);
-    liveState.dataset.state = next.cutoffActive&&next.settings.enabled ? 'cutoff' : next.settings.enabled&&next.writable ? 'active' : 'off';
-    setText(liveState, liveState.dataset.state==='cutoff' ? 'Outdoor cutoff active' : liveState.dataset.state==='active' ? 'Control active' : 'Control off');
+    const automatic = next.settings.enabled&&next.writable;
+    const held = automatic&&next.manualOff;
+    liveState.dataset.state = held ? 'held' : automatic&&next.cutoffActive ? 'cutoff' : automatic ? 'active' : 'off';
+    setText(liveState, held ? 'Manual stop' : automatic&&next.cutoffActive ? 'Outdoor cutoff active' : automatic ? 'Control active' : 'Control off');
+    resume.hidden = !held;
     setText(report, next.settings.enabled ? next.decision : '');
     setText(demandReading, saved.length ? (reporting.length ? heating+' of '+saved.length+' calling' : 'Waiting for state') : 'No thermostats selected');
     setText(outdoorReading, currentSensor ? (readout == null ? 'Waiting for reading' : temperature(readout)) : 'No sensor selected');
@@ -257,7 +276,8 @@ function externalHeatingForm(title, data, token) {
     dom('section',{class:'heating-summary','aria-label':'External heating status'},
       dom('div',{class:'heating-summary-top'},
         dom('div',{},liveState,report),
-        dom('label',{for:enabled.id,class:'heating-enable'},'Enable external control',enabled)),
+        dom('div',{class:'heating-summary-actions'},resume,
+          dom('label',{for:enabled.id,class:'heating-enable'},'Enable external control',enabled))),
       !data.writable&&dom('p',{class:'heating-readonly'},'Boiler writes and a controller PIN are required to enable control.'),
       dom('dl',{class:'heating-live'},metrics)),
     notices,
