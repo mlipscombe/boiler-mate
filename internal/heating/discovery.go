@@ -52,9 +52,10 @@ func (p discoveryPayload) str(key, alias string) string {
 }
 
 type valueSource struct {
-	Topic        string
-	Field        string
-	ZigbeeAction bool
+	Topic             string
+	Field             string
+	ZigbeeAction      bool
+	TemperatureFormat string
 }
 
 type availabilitySource struct {
@@ -145,7 +146,7 @@ func readInput(id, kind string, payload discoveryPayload) (inputSpec, bool) {
 		if seconds > 0 && seconds <= int64((1<<63-1)/time.Second) {
 			input.ExpireAfter = time.Duration(seconds) * time.Second
 		}
-		input.Value, err = readValueSource(base, payload.str("state_topic", "stat_t"), payload.str("value_template", "val_tpl"), false)
+		input.Value, err = readTemperatureSource(base, payload.str("state_topic", "stat_t"), payload.str("value_template", "val_tpl"))
 	default:
 		return inputSpec{}, false
 	}
@@ -195,8 +196,19 @@ var (
 	zigbeeTemplate      = regexp.MustCompile(`^\{%\s*set values\s*=\s*\{\s*None\s*:\s*None\s*,\s*'idle'\s*:\s*'idle'\s*,\s*'heat'\s*:\s*'heating'\s*,\s*'cool'\s*:\s*'cooling'\s*,\s*'fan_only'\s*:\s*'fan'\s*\}\s*%\}\s*\{\{\s*values\[` + jsonFieldPattern + `\]\s*\}\}$`)
 	rawTemplate         = regexp.MustCompile(`^\{\{\s*value\s*\}\}$`)
 	fieldGuard          = regexp.MustCompile(`^\{%\s*if\s+"([A-Za-z0-9_]+)"\s+in value_json\s*%\}\s*(.*?)\s*\{%\s*endif\s*%\}$`)
+	temperatureTemplate = regexp.MustCompile(`^\{\{\s*value\s*\|\s*float\s*(?:\|\s*round\(\s*([0-6])\s*\)\s*)?\}\}$`)
 	unsupportedTemplate = errors.New("The device advertises an unsupported MQTT value template.")
 )
+
+func readTemperatureSource(base, topic, template string) (valueSource, error) {
+	match := temperatureTemplate.FindStringSubmatch(strings.TrimSpace(template))
+	if match == nil {
+		return readValueSource(base, topic, template, false)
+	}
+	source, err := readValueSource(base, topic, "", false)
+	source.TemperatureFormat = match[1]
+	return source, err
+}
 
 func readValueSource(base, topic, template string, action bool) (valueSource, error) {
 	if base != "" && strings.HasPrefix(topic, "~") {
@@ -237,7 +249,14 @@ func readValueSource(base, topic, template string, action bool) (valueSource, er
 
 func (s valueSource) value(payload []byte) (string, bool) {
 	if s.Field == "" {
-		return strings.TrimSpace(string(payload)), true
+		value := strings.TrimSpace(string(payload))
+		if s.TemperatureFormat != "" {
+			if number, err := strconv.ParseFloat(value, 64); err == nil {
+				precision := int(s.TemperatureFormat[0] - '0')
+				value = strconv.FormatFloat(number, 'f', precision, 64)
+			}
+		}
+		return value, true
 	}
 	var obj map[string]json.RawMessage
 	if json.Unmarshal(payload, &obj) != nil || obj[s.Field] == nil {

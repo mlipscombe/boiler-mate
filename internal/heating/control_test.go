@@ -220,6 +220,22 @@ func TestZigbeeActionAndAvailability(t *testing.T) {
 	}
 }
 
+func TestRTL433OutdoorTemperature(t *testing.T) {
+	specs := readDiscovery("homeassistant/sensor/Acurite/temperature/config", "sensor", []byte(`{
+		"device_class":"temperature", "unit_of_measurement":"°C", "state_topic":"rtl_433/temperature_C",
+		"value_template":"{{ value|float|round(1) }}"
+	}`))
+	if len(specs) != 1 || specs[0].Problem != "" {
+		t.Fatalf("discovery = %+v", specs)
+	}
+	in := newInput(specs[0])
+	now := time.Now()
+	in.receive("rtl_433/temperature_C", []byte("4.86"), false, now)
+	if value, ok := in.currentTemperature(now, time.Minute); !ok || value != 4.9 {
+		t.Fatalf("outdoor temperature = %v, %t", value, ok)
+	}
+}
+
 func nextAt(c *Control, now time.Time) command {
 	c.boilerAt = now
 	got, _ := c.plan(now)
