@@ -297,18 +297,24 @@ function updateOverview() {
   const focusedAction = live.contains(document.activeElement) ? document.activeElement.dataset.action : null;
   const remaining = signal('operating_data.content');
   const output = signal('operating_data.power_kw');
+  const powerPercent = signal('operating_data.power_pct');
+  const powerHeading = op.state===5 ? [
+    Number.isFinite(powerPercent) ? display(powerPercent)+'%' : null,
+    Number.isFinite(output) ? decimalTenths.format(output)+' kW' : null,
+  ].filter(Boolean) : [];
   const water = signal('operating_data.dhw_temp');
   const returnTemp = signal('operating_data.return_temp');
   const readings = [
     ['Fuel hopper',remaining!=null&&remaining<0 ? 'Below minimum' : withUnit(remaining,'kg'),withUnit(signal('advanced_data.total_consumption_24hours'),'kg')+' used in 24 h','#fuel'],
-    ['Boiler',withUnit(output,'kW'),withUnit(signal('operating_data.power_pct'),'%')+' burner output','#boiler'],
+    ['Boiler',withUnit(output,'kW'),withUnit(powerPercent,'%')+' burner output','#boiler'],
     ['Heating circuit',withUnit(returnTemp,'°C'),'Return water','#weather'],
     ['DHW',water==null?'No reading':withUnit(water,'°C'),'Cylinder sensor','#hot-water'],
   ];
   live.replaceChildren(dom('section',{class:'overview-system','aria-label':'Current boiler state'},
     dom('div',{class:'system-main'},
       dom('div',{},dom('div',{class:'operating-mode'},dom('span',{class:'indicator'+(status.online?' live':'')}),status.online?'Controller online':'Controller offline'),
-        status.online && dom('h2',{},op.state_text || 'Waiting for data'),
+        status.online && dom('h2',{class:powerHeading.length?'system-firing-state':null},op.state_text || 'Waiting for data',
+          powerHeading.map(value=>dom('span',{class:'system-firing-output'},' '+value))),
         status.online ? dom('p',{id:'overview-phase',class:'muted'}) :
           dom('p',{class:'muted mt-1'},last ? 'Last updated '+new Date(last).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : 'Waiting for controller data.')),
       dom('div',{class:'system-temperature'},dom('span',{},'Boiler temperature'),

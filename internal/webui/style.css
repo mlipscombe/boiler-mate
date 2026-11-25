@@ -80,6 +80,8 @@
   .overview-system { @apply overflow-hidden rounded-lg border border-border bg-surface; }
   .system-main { @apply grid grid-cols-2 items-start gap-4 px-4 pt-4 pb-5 sm:px-5; }
   .system-main h2 { @apply mt-1.5 mb-0.5 text-3xl leading-tight font-semibold tracking-tight; }
+  .system-main h2.system-firing-state { @apply flex flex-wrap items-baseline gap-x-2 gap-y-0.5; }
+  .system-firing-output { @apply text-lg font-semibold whitespace-nowrap text-muted sm:text-xl; }
   .power-controls { @apply col-span-2 grid gap-1.5 border-t border-border pt-3 lg:col-span-1 lg:border-t-0 lg:border-l lg:pl-4 lg:pt-0; }
   .power-controls h3 { @apply text-sm font-semibold; }
   .power-buttons { @apply flex flex-wrap items-center gap-2; }
