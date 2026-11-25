@@ -59,7 +59,19 @@ func fetch[T any](ctx context.Context, c Controller, fn nbe.Function, payload st
 func Read(ctx context.Context, c Controller, kind string, q url.Values) (any, error) {
 	switch kind {
 	case "versions":
-		return fetch(ctx, c, nbe.GetAvailableProgramsFunction, nbe.AvailableProgramsRequest, nbe.ParseAvailablePrograms)
+		// A controller may decline the first request while it obtains the list.
+		for attempt := 0; ; attempt++ {
+			rows, err := fetch(ctx, c, nbe.GetAvailableProgramsFunction, nbe.AvailableProgramsRequest, nbe.ParseAvailablePrograms)
+			var declined *nbe.ResponseError
+			if err == nil || attempt == 2 || (!errors.As(err, &declined) && !errors.Is(err, context.DeadlineExceeded)) {
+				return rows, err
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt+1) * time.Second):
+			}
+		}
 	case "sensors":
 		return fetch(ctx, c, nbe.GetRemoteSensorsFunction, nbe.RemoteSensorsRequest, nbe.ParseRemoteSensors)
 	case "events":

@@ -155,6 +155,24 @@ func verifyBridge(t *testing.T, enableWrites bool) {
 
 	if !enableWrites {
 		verifyControllerReads(t, observer, prefix)
+		// The MQTT read warmed the same list used by the dashboard. Simulate a
+		// controller that declines refresh requests while the list is current.
+		device.SetRawReply(nbe.GetAvailableProgramsFunction, 1, "")
+		if got := get(t, httpClient, web, "/api/controller/versions"); !strings.Contains(got, `"version":"0616"`) {
+			t.Fatalf("first dashboard firmware list after an MQTT read = %s", got)
+		}
+		refreshClient := &http.Client{Timeout: 6 * time.Second}
+		resp, err := refreshClient.Get("http://" + web + "/api/controller/versions?refresh=1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("declined refresh returned %d", resp.StatusCode)
+		}
+		if got := get(t, httpClient, web, "/api/controller/versions"); !strings.Contains(got, `"version":"0616"`) {
+			t.Fatalf("failed refresh displaced last successful list: %s", got)
+		}
 	}
 	if writes := device.WriteAttempts(); writes != 0 {
 		t.Fatalf("%d settings writes reached the simulator", writes)

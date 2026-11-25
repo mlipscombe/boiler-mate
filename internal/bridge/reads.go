@@ -18,14 +18,18 @@ type readRequest struct {
 	query url.Values
 }
 
+const firmwareListFreshFor = time.Hour
+
 type controllerReads struct {
 	boiler   controllerread.Controller
 	client   *mqtt.Client
 	logger   *slog.Logger
 	gate     chan struct{}
 	requests chan readRequest
-	// Only the holder of gate reads or updates last.
-	last map[string]time.Time
+	// Only the holder of gate reads or updates these observations.
+	last       map[string]time.Time
+	firmware   []nbe.ProgramVersion
+	firmwareAt time.Time
 }
 
 func newControllerReads(boiler controllerread.Controller, client *mqtt.Client, logger *slog.Logger) *controllerReads {
@@ -53,6 +57,9 @@ func (reads *controllerReads) subscribe(prefix string) error {
 }
 
 func (reads *controllerReads) read(ctx context.Context, kind string, q url.Values) (any, error) {
+	if kind == "versions" && q.Get("refresh") != "1" {
+		return reads.refresh(ctx, kind, q, firmwareListFreshFor)
+	}
 	return reads.refresh(ctx, kind, q, 0)
 }
 
@@ -66,8 +73,14 @@ func (reads *controllerReads) refresh(ctx context.Context, kind string, q url.Va
 	case reads.gate <- struct{}{}:
 	}
 	defer func() { <-reads.gate }()
-	if minimumAge > 0 && time.Since(reads.last[kind]) < minimumAge {
-		return nil, nil
+	if minimumAge > 0 {
+		if kind == "versions" {
+			if reads.firmware != nil && time.Since(reads.firmwareAt) < minimumAge {
+				return reads.firmware, nil
+			}
+		} else if time.Since(reads.last[kind]) < minimumAge {
+			return nil, nil
+		}
 	}
 	data, err := controllerread.Read(ctx, reads.boiler, kind, q)
 	if ctx.Err() != nil {
@@ -77,7 +90,8 @@ func (reads *controllerReads) refresh(ctx context.Context, kind string, q url.Va
 	if kind == "events" && q.Get("at") != "" {
 		topic = "event_history"
 	}
-	result := map[string]any{"read_at": time.Now().UTC(), "query": q.Encode()}
+	now := time.Now().UTC()
+	result := map[string]any{"read_at": now, "query": q.Encode()}
 	if err == nil {
 		result["data"] = data
 	} else {
@@ -89,10 +103,14 @@ func (reads *controllerReads) refresh(ctx context.Context, kind string, q url.Va
 		if err == nil {
 			switch rows := data.(type) {
 			case []nbe.ProgramVersion:
+				reads.firmware, reads.firmwareAt = rows, now
 				count = len(rows)
 			case []nbe.RemoteSensor:
 				count = len(rows)
 			}
+		} else if kind == "versions" && reads.firmware != nil && now.Sub(reads.firmwareAt) < firmwareListFreshFor {
+			result["data"], result["read_at"] = reads.firmware, reads.firmwareAt
+			count = len(reads.firmware)
 		}
 		updates[kind+"_count"] = count
 	}
@@ -112,7 +130,7 @@ func (reads *controllerReads) run(ctx context.Context) {
 		kind     string
 		interval time.Duration
 	}{
-		{"versions", time.Hour}, {"sensors", time.Minute}, {"events", time.Minute},
+		{"versions", firmwareListFreshFor}, {"sensors", time.Minute}, {"events", time.Minute},
 	}
 	next := 0
 	for ctx.Err() == nil {
@@ -120,7 +138,7 @@ func (reads *controllerReads) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case req := <-reads.requests:
-			_, _ = reads.read(ctx, req.kind, req.query)
+			_, _ = reads.refresh(ctx, req.kind, req.query, 0)
 		case <-tick.C:
 			list := lists[next]
 			_, _ = reads.refresh(ctx, list.kind, nil, list.interval)

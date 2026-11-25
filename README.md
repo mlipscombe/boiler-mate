@@ -58,7 +58,7 @@ Enable desktop notices under **Events → Desktop notifications** on each browse
 
 Open **Charts → Controller history** for chart IDs stored by the boiler, **Events → Controller log** for its event log, **Live data → Selected readings** for a one-time group of operating values, or **System → Firmware versions / Wireless sensors** for controller lists. Firmware and hardware determine which reads succeed. Chart IDs have controller-specific meanings.
 
-Subscribe to `<prefix>/controller/+` for retained JSON results. Each result includes `read_at`, the URL-encoded `query`, and either `data` or `error`. To request a read, publish a non-retained message to `<prefix>/get/controller/<name>`. These reads work with controller writes disabled.
+Subscribe to `<prefix>/controller/+` for retained JSON results. Each result includes `read_at`, the URL-encoded `query`, and `data` for a successful read or `error` for a failed read. To request a read, publish a non-retained message to `<prefix>/get/controller/<name>`. These reads work with controller writes disabled.
 
 | Name | Request payload | Result topic under `<prefix>/controller/` |
 | --- | --- | --- |
@@ -68,7 +68,7 @@ Subscribe to `<prefix>/controller/+` for retained JSON results. Each result incl
 | `values` | `names=boiler_temp,state` | `values` |
 | `chart` | `from=1732442200&to=1732442400&step=1&ids=0,3` | `chart` |
 
-Chart bounds are Unix timestamps on the same controller-local day. Step is in minutes and IDs are in ascending order. The bridge refreshes firmware versions hourly and recent events and room sensors approximately once a minute. Chart and selected-value reads run on request. When a controller declines a compact selected-value read, the bridge extracts the requested fields from one fresh operating-data snapshot. Dashboard reads also publish their results to MQTT. Home Assistant discovery adds firmware-version and wireless-sensor counts with the full results in their attributes. A failed list read clears its count to unknown.
+Chart bounds are Unix timestamps on the same controller-local day. Step is in minutes and IDs are in ascending order. The bridge refreshes firmware versions hourly and recent events and room sensors approximately once a minute. Chart and selected-value reads run on request. When a controller declines a compact selected-value read, the bridge extracts the requested fields from one fresh operating-data snapshot. Dashboard reads also publish their results to MQTT. Home Assistant discovery adds firmware-version and wireless-sensor counts with the full results in their attributes. The dashboard reuses a successful firmware list for one hour. Refresh requests a fresh copy. If that read fails, the page keeps its displayed list, and MQTT includes the error alongside any still-fresh cached list and its original read time. Without a current list the count is unknown.
 
 ### Frontend development
 

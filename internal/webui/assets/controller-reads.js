@@ -93,20 +93,29 @@ function controllerReadPage(pageID, kind, token) {
   const submit = dom('button',{type:'submit',class:'secondary'},
     kind==='chart'?'Read history':kind==='values'?'Read selected values':'Refresh');
   const form = dom('form',{},fields,submit);
-  async function load() {
+  const feedback = dom('div',{'role':'status'});
+  let haveFirmwareList = false;
+  async function load(manual=false) {
     if(!form.reportValidity())return;
     submit.disabled=true;
-    output.replaceChildren(empty('Reading from the controller…'));
+    if(!haveFirmwareList)output.replaceChildren();
+    feedback.replaceChildren(empty('Reading from the controller…'));
     try {
       const query=params();
+      if(manual&&kind==='versions')query.set('refresh','1');
       const rows=await api('controller/'+kind+'?'+query);
-      if(token===generation)render(rows,query);
+      if(token===generation){
+        render(rows,query);
+        haveFirmwareList=kind==='versions';
+        feedback.replaceChildren();
+      }
     } catch(error) {
-      if(token===generation)output.replaceChildren(empty(error.message));
+      if(token===generation)feedback.replaceChildren(empty(haveFirmwareList?
+        'Refresh failed. Showing the previous firmware list. '+error.message:error.message));
     } finally {submit.disabled=false;}
   }
-  form.addEventListener('submit',event=>{event.preventDefault();load();});
+  form.addEventListener('submit',event=>{event.preventDefault();load(true);});
   main.replaceChildren(heading(titles[kind],descriptions[kind]),dom('div',{class:'stack'},
-    controllerTabs(pageID,kind),dom('section',{class:'card'},form,output)));
+    controllerTabs(pageID,kind),dom('section',{class:'card'},form,feedback,output)));
   if(['versions','sensors','events'].includes(kind))load();
 }
