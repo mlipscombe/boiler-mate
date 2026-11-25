@@ -45,7 +45,12 @@ const (
 	GetEventLogFunction          Function = 8
 	GetInfoFunction              Function = 9
 	GetAvailableProgramsFunction Function = 10
-	UnknownFunction              Function = -1
+	// CustomRequestFunction reads a caller-chosen list of operating values.
+	CustomRequestFunction Function = 11
+	// GetRemoteSensorsFunction lists the wireless room sensors. Function 13,
+	// which renames and removes them, is a write and is deliberately absent.
+	GetRemoteSensorsFunction Function = 12
+	UnknownFunction          Function = -1
 )
 
 var Settings = []string{
