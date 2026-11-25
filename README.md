@@ -68,6 +68,8 @@ Boiler Mate reads Home Assistant MQTT discovery on the same broker. It supports 
 
 The page also discovers thermostats directly from a Z-Wave JS UI gateway using named MQTT topics under the `zwave` prefix. It uses the thermostat's operating state and the node, driver, and gateway availability topics. [Z-Wave JS UI MQTT guide](https://github.com/zwave-js/zwave-js-ui/blob/master/docs/guide/mqtt.md)
 
+Room and outdoor readings are shown in the page's selected unit. For thermostats that omit the unit from their MQTT data, set `BOILER_MATE_MQTT_THERMOSTAT_UNIT` to `C` (default) or `F` to match the readings they publish. New installations also use that unit as the initial display preference.
+
 ### Controller reads in the dashboard and MQTT
 
 Open **Charts → Controller history** for chart IDs stored by the boiler, **Events → Controller log** for its event log, **Live data → Selected readings** for a one-time group of operating values, or **System → Firmware versions / Wireless sensors** for controller lists. Firmware and hardware determine which reads succeed. Chart IDs have controller-specific meanings.

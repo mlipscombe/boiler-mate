@@ -82,6 +82,7 @@ const days = ['monday','tuesday','wednesday','thursday','friday','saturday','sun
 const datetime = new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle:'short'});
 const shorttime = new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'});
 const numeric = new Intl.NumberFormat(undefined,{maximumFractionDigits:2});
+const decimalTenths = new Intl.NumberFormat(undefined,{minimumFractionDigits:1,maximumFractionDigits:1});
 const main = document.querySelector('main');
 const chartRenderers = new Map();
 let status = {data:{},online:false,control:false};
@@ -92,6 +93,7 @@ let statusSource = null;
 let statusPoll = 0;
 let refreshPageHistory = null;
 let refreshPageEvents = null;
+let overviewPhaseTimer = 0;
 let toastTimer = 0;
 let noticeSource = null;
 let noticePoll = 0;
@@ -306,8 +308,9 @@ function updateOverview() {
   live.replaceChildren(dom('section',{class:'overview-system','aria-label':'Current boiler state'},
     dom('div',{class:'system-main'},
       dom('div',{},dom('div',{class:'operating-mode'},dom('span',{class:'indicator'+(status.online?' live':'')}),status.online?'Controller online':'Controller offline'),
-        dom('h2',{},op.state_text || 'Waiting for data'),
-        last&&dom('p',{class:'muted'},'Updated '+shorttime.format(new Date(last)))),
+        status.online && dom('h2',{},op.state_text || 'Waiting for data'),
+        status.online ? dom('p',{id:'overview-phase',class:'muted'}) :
+          dom('p',{class:'muted mt-1'},last ? 'Last updated '+new Date(last).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : 'Waiting for controller data.')),
       dom('div',{class:'system-temperature'},dom('span',{},'Boiler temperature'),
         dom('strong',{},display(signal('operating_data.boiler_temp')),dom('small',{},'°C')),
         dom('span',{},'Target '+withUnit(signal('operating_data.boiler_ref'),'°C'))),
@@ -328,6 +331,38 @@ function updateOverview() {
       dom('strong',{},withUnit(value,unitSignal(key))));
   }));
   if (focusedAction) live.querySelector('[data-action="'+focusedAction+'"]')?.focus({preventScroll:true});
+  updateOverviewPhase();
+}
+
+const boilerSubstates = [null, 'Ventilating', 'Feeding pellets', 'Ignition pulse', 'Ignition',
+  'Cooling boiler', 'Cooling burner', 'Fan cleaning', 'Ash removal',
+  'Compressor cleaning: waiting for valve 1', 'Compressor cleaning: valve 1 active',
+  'Compressor cleaning: waiting for valve 2', 'Compressor cleaning: valve 2 active',
+  'Compressor cleaning: waiting for valve 3', 'Compressor cleaning: valve 3 active',
+  'External contact', 'Overrun', 'Residual heat to hot water', 'Vacuum transport',
+  'Airflow calibration: waiting for shutdown', 'Calibrating airflow', 'Calculated efficiency'];
+
+function updateOverviewPhase() {
+  const line = document.getElementById('overview-phase');
+  if (!line) return;
+  const {at, values} = status.data.operating_data ?? {};
+  const {substate,substate_sec:seconds} = values ?? {};
+  let phase = '';
+  if (Number.isInteger(substate)&&substate>0) {
+    phase = boilerSubstates[substate] ?? 'Sub-state '+substate;
+    if (Number.isFinite(seconds)&&seconds>0) {
+      if (substate===21) {
+        phase += ' · '+decimalTenths.format(seconds/10)+'%';
+      } else {
+        const sampledAt = Date.parse(at);
+        const elapsed = Number.isFinite(sampledAt) ? Math.max(0,Math.floor((Date.now()-sampledAt)/1000)) : 0;
+        const left = Math.ceil(seconds-elapsed);
+        if (left>0) phase += ' · '+Math.floor(left/60)+':'+String(left%60).padStart(2,'0')+' remaining';
+      }
+    }
+  }
+  line.hidden = !phase;
+  if (line.textContent!==phase) line.textContent=phase;
 }
 function withUnit(value,unit) {
   return display(value)+(value==null||!unit?'':' '+unit);
@@ -335,9 +370,10 @@ function withUnit(value,unit) {
 function renderCombustion(target) {
   const reading = (name,key,className='combustion-reading')=>{
     const value = status.online ? signal('operating_data.'+key) : null;
+    const formatted = key==='oxygen'&&typeof value==='number' ? decimalTenths.format(value) : display(value);
     return dom('div',{class:className},
       dom('span',{class:'metric-label'},name),
-      dom('strong',{class:'combustion-value'},display(value),value!=null&&dom('small',{},unitSignal(key))));
+      dom('strong',{class:'combustion-value'},formatted,value!=null&&dom('small',{},unitSignal(key))));
   };
   const oxygen = reading('Oxygen','oxygen','combustion-current');
   const oxygenTarget = status.online ? signal('operating_data.oxygen_ref') ?? signal('advanced_data.o2_setpoint') : null;
@@ -345,7 +381,7 @@ function renderCombustion(target) {
     const label=oxygen.firstElementChild;
     const header=dom('div',{class:'combustion-oxygen-label'});
     label.replaceWith(header);
-    header.append(label,dom('span',{class:'combustion-target'},'Target '+withUnit(oxygenTarget,'%')));
+    header.append(label,dom('span',{class:'combustion-target'},'Target '+decimalTenths.format(oxygenTarget)+' %'));
   }
   const compensation = [['Low','corr_low'],['Medium','corr_medium'],['High','corr_high']];
   target.replaceChildren(
@@ -374,6 +410,7 @@ function overview(token) {
         card('Recent events',null,recent,dom('a',{class:'home-link',href:'#events'},'View all events'))),
       card('Other readings',null,dom('div',{class:'compact-readings',id:'overview-custom'}),customise)));
   updateOverview();
+  overviewPhaseTimer = setInterval(updateOverviewPhase,1000);
   const setMetrics = selection=>{
     chosenMetrics=selection??defaultOverviewReadings;
     saveLocal('metrics',selection);
@@ -1242,6 +1279,7 @@ function helpPage() {
 function renderPage() {
   refreshPageHistory = null;
   refreshPageEvents = null;
+  clearInterval(overviewPhaseTimer);
   chartRenderers.clear();
   const [hashPage,requestedSection]=window.location.hash.slice(1).split('/');
   const requested=({ 'advanced-data':'live-data', messages:'events', notifications:'events' })[hashPage]??hashPage;

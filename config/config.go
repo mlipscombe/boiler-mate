@@ -40,6 +40,7 @@ type Config struct {
 	WebBind                  string
 	WebData                  string
 	OutdoorWeatherFahrenheit bool
+	MQTTThermostatUnit       string
 }
 
 func Load(args []string, output io.Writer) (Config, error) {
@@ -56,6 +57,8 @@ func Load(args []string, output io.Writer) (Config, error) {
 	flags.StringVar(&cfg.WebData, "web-data", lookupEnvOrString("BOILER_MATE_WEB_DATA", "boiler-mate-data"), "web interface data directory")
 	flags.BoolVar(&cfg.OutdoorWeatherFahrenheit, "outdoor-weather-fahrenheit",
 		lookupEnvOrBool("BOILER_MATE_OUTDOOR_WEATHER_FAHRENHEIT", false), "convert Fahrenheit outdoor weather readings for the dashboard")
+	flags.StringVar(&cfg.MQTTThermostatUnit, "mqtt-thermostat-unit",
+		lookupEnvOrString("BOILER_MATE_MQTT_THERMOSTAT_UNIT", "C"), "temperature unit (C or F) for MQTT thermostats that omit it")
 	if err := flags.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -98,6 +101,10 @@ func Load(args []string, output io.Writer) (Config, error) {
 	}
 	if cfg.WebBind != "false" && strings.TrimSpace(cfg.WebData) == "" {
 		return cfg, errors.New("web data directory is required")
+	}
+	cfg.MQTTThermostatUnit = strings.ToUpper(strings.TrimSpace(cfg.MQTTThermostatUnit))
+	if cfg.MQTTThermostatUnit != "C" && cfg.MQTTThermostatUnit != "F" {
+		return cfg, errors.New("MQTT thermostat temperature unit must be C or F")
 	}
 	cfg.LogLevel = parseLevel(*logLevel)
 	cfg.EnableWrites = lookupEnvOrBool("BOILER_MATE_ENABLE_WRITES", false)

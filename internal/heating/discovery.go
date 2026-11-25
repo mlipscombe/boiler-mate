@@ -67,6 +67,7 @@ type availabilitySource struct {
 type inputSpec struct {
 	ID, Name, Kind, Unit string
 	Value                valueSource
+	RoomTemperature      valueSource
 	Availability         []availabilitySource
 	Mode                 string
 	ExpireAfter          time.Duration
@@ -132,6 +133,11 @@ func readInput(id, kind string, payload discoveryPayload) (inputSpec, bool) {
 	case "climate":
 		input.Kind = thermostat
 		input.Value, err = readValueSource(base, payload.str("action_topic", "act_t"), payload.str("action_template", "act_tpl"), true)
+		input.RoomTemperature, _ = readTemperatureSource(base, payload.str("current_temperature_topic", "curr_temp_t"), payload.str("current_temperature_template", "curr_temp_tpl"))
+		input.Unit = strings.TrimPrefix(payload.str("temperature_unit", "temp_unit"), "°")
+		if input.Unit != "" {
+			input.Unit = "°" + input.Unit
+		}
 	case "sensor":
 		class := payload.str("device_class", "dev_cla")
 		input.Unit = payload.str("unit_of_measurement", "unit_of_meas")
@@ -308,10 +314,13 @@ func temperatureValue(unit, value string) (float64, bool) {
 		return 0, false
 	}
 	switch unit {
+	case "°C":
 	case "°F":
 		number = (number - 32) * 5 / 9
 	case "K":
 		number -= 273.15
+	default:
+		return 0, false
 	}
 	return number, number >= -100 && number <= 100
 }

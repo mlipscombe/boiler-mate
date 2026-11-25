@@ -18,7 +18,7 @@ const (
 func newTestControl(t *testing.T, settings Settings) *Control {
 	t.Helper()
 	control := New(t.TempDir(), "test", slog.New(slog.NewTextHandler(io.Discard, nil)),
-		func(context.Context, string, int, func() bool) error { return nil })
+		Options{Write: func(context.Context, string, int, func() bool) error { return nil }})
 	if err := control.Set(settings); err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestOutdoorOnlyResumesItsOwnStopAfterRestart(t *testing.T) {
 	c.Receive("outside", []byte("21"), false)
 	c.Observe("operating_data", map[string]any{"state_on": "ON"})
 	c.apply(t.Context())
-	restarted := New(filepath.Dir(c.path), "test", c.logger, c.write)
+	restarted := New(filepath.Dir(c.path), "test", c.logger, Options{Write: c.write})
 	discover(restarted)
 	restarted.Receive("outside", []byte("17"), false)
 	restarted.boiler = "OFF"
@@ -277,3 +277,50 @@ func nextAt(c *Control, now time.Time) command {
 }
 
 func pointer(value float64) *float64 { return &value }
+
+func TestDashboardReadsUnselectedInputs(t *testing.T) {
+	c := New(t.TempDir(), "test", slog.New(slog.NewTextHandler(io.Discard, nil)), Options{
+		DashboardReadings: true, ThermostatUnit: "F",
+	})
+	const node = "zwave/Dining_Room/Downstairs_Thermostat"
+	const gateway = "zwave/_CLIENTS/ZWAVE_GATEWAY-broker/status"
+	c.Receive(gateway, []byte(`{"value":true}`), true)
+	c.Receive(node+"/thermostat_operating_state/endpoint_0/state", []byte(`{"value":1}`), true)
+	c.Receive(gateway, []byte(`{"value":true}`), true)
+	c.Receive(node+"/status", []byte(`{"value":true}`), true)
+	c.Receive("zwave/driver/status", []byte("true"), true)
+	c.Receive(node+"/sensor_multilevel/endpoint_0/Air_temperature", []byte(`{"value":64}`), true)
+	c.Receive(north, []byte(`{"act_t":"north/state","act_tpl":"{{ value_json.action }}","curr_temp_t":"north/state","curr_temp_tpl":"{{ value_json.temperature }}","temp_unit":"C"}`), true)
+	c.Receive("north/state", []byte(`{"action":"idle","temperature":20}`), true)
+	c.Receive(outdoor, []byte(`{"cmps":{"outside":{"p":"sensor","dev_cla":"temperature","unit_of_meas":"°C","stat_t":"outside"}}}`), true)
+	c.Receive("outside", []byte("0"), false)
+
+	status := c.Snapshot()
+	if status.Settings.Enabled || len(status.Settings.Thermostats) != 0 || status.OutdoorTemperature != nil {
+		t.Fatalf("monitoring inputs changed external control settings: %+v", status)
+	}
+	readings := make(map[string]InputStatus)
+	for _, in := range status.Inputs {
+		readings[in.ID] = in
+	}
+	for _, want := range []struct {
+		id, action  string
+		temperature float64
+	}{
+		{node + "/thermostat_operating_state/endpoint_0/state", "heating", 64},
+		{north, "idle", 68},
+		{outdoor + "#outside", "", 32},
+	} {
+		in := readings[want.id]
+		if in.Action != want.action || in.Temperature == nil || *in.Temperature != want.temperature {
+			t.Errorf("%s = %+v, want %s and %v °F", want.id, in, want.action, want.temperature)
+		}
+	}
+	c.Receive(gateway, []byte(`{"value":false}`), false)
+	for _, in := range c.Snapshot().Inputs {
+		if in.ID == node+"/thermostat_operating_state/endpoint_0/state" &&
+			(in.Availability != "offline" || in.Action != "" || in.Temperature != nil) {
+			t.Fatalf("offline thermostat retained stale readings: %+v", in)
+		}
+	}
+}

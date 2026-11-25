@@ -1,6 +1,7 @@
 package heating
 
 import (
+	"encoding/json"
 	"slices"
 	"time"
 )
@@ -67,22 +68,49 @@ func (in *input) receive(topic string, payload []byte, retained bool, now time.T
 	if previous != "offline" && current == "offline" {
 		in.at, in.action = time.Time{}, ""
 	}
-	if in.spec.Value.Topic != topic || retained && current == "offline" {
+	if retained && current == "offline" {
 		return
 	}
-	value, ok := in.spec.Value.value(payload)
+	source := in.spec.Value
+	if in.spec.Kind == thermostat {
+		if source.Topic == topic {
+			if value, ok := source.value(payload); ok {
+				state, valid := actionValue(source, value)
+				if in.spec.ZWave {
+					state, valid = zwaveAction(value)
+				}
+				if valid {
+					in.action = state
+				}
+			}
+		}
+		source = in.spec.RoomTemperature
+	}
+	if source.Topic != topic {
+		return
+	}
+	value, ok := source.value(payload)
 	if !ok {
 		return
 	}
-	if in.spec.Kind == thermostat {
-		state, valid := actionValue(in.spec.Value, value)
-		if in.spec.ZWave {
-			state, valid = zwaveAction(value)
+	unit := in.spec.Unit
+	if in.spec.ZWave {
+		var message struct {
+			Unit     string `json:"unit"`
+			Metadata struct {
+				Unit string `json:"unit"`
+			} `json:"metadata"`
 		}
-		if valid {
-			in.action, in.at = state, now
+		if json.Unmarshal(payload, &message) == nil {
+			for _, reported := range []string{message.Unit, message.Metadata.Unit} {
+				if reported == "°C" || reported == "°F" {
+					unit = reported
+					break
+				}
+			}
 		}
-	} else if celsius, ok := temperatureValue(in.spec.Unit, value); ok {
+	}
+	if celsius, ok := temperatureValue(unit, value); ok {
 		in.celsius, in.at = celsius, now
 	} else if value == "None" || value == "null" || value == "unavailable" || value == "unknown" || value == "" {
 		in.at = time.Time{}
@@ -100,8 +128,8 @@ func (in *input) currentTemperature(now time.Time, timeout time.Duration) (float
 	if in.availabilityState() != "online" || in.at.IsZero() {
 		return 0, false
 	}
-	if in.spec.ExpireAfter > 0 {
-		timeout = min(timeout, in.spec.ExpireAfter)
+	if in.spec.ExpireAfter > 0 && (timeout == 0 || in.spec.ExpireAfter < timeout) {
+		timeout = in.spec.ExpireAfter
 	}
-	return in.celsius, now.Sub(in.at) < timeout
+	return in.celsius, timeout == 0 || now.Sub(in.at) < timeout
 }

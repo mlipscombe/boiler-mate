@@ -25,11 +25,19 @@ var ErrReadOnly = errors.New("enable boiler writes and configure a controller PI
 
 type WriteFunc func(ctx context.Context, key string, value int, current func() bool) error
 
+type Options struct {
+	Write             WriteFunc
+	DashboardReadings bool
+	ThermostatUnit    string
+}
+
 type Control struct {
-	path   string
-	logger *slog.Logger
-	write  WriteFunc
-	wake   chan struct{}
+	path              string
+	logger            *slog.Logger
+	write             WriteFunc
+	wake              chan struct{}
+	dashboardReadings bool
+	thermostatUnit    string
 
 	operation sync.Mutex
 	mu        sync.Mutex
@@ -56,12 +64,14 @@ type Control struct {
 }
 
 type InputStatus struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Kind    string `json:"kind"`
-	Topic   string `json:"topic"`
-	Problem string `json:"problem,omitempty"`
-	Action  string `json:"action,omitempty"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Kind         string   `json:"kind"`
+	Topic        string   `json:"topic"`
+	Problem      string   `json:"problem,omitempty"`
+	Action       string   `json:"action,omitempty"`
+	Availability string   `json:"availability,omitempty"`
+	Temperature  *float64 `json:"temperature,omitempty"`
 }
 
 type Status struct {
@@ -76,18 +86,24 @@ type Status struct {
 	PowerError         string        `json:"powerError,omitempty"`
 }
 
-func New(dataDir, serial string, logger *slog.Logger, write WriteFunc) *Control {
+func New(dataDir, serial string, logger *slog.Logger, options Options) *Control {
 	path := filepath.Join(dataDir, "external-heating.json")
-	saved, err := load(path, serial)
+	defaults := defaultSettings()
+	if options.ThermostatUnit == "F" {
+		defaults.Unit = "F"
+		defaults.RestartDelta = 3.6
+	}
+	saved, err := load(path, serial, defaults)
 	control := &Control{
-		path: path, logger: logger, write: write, wake: make(chan struct{}, 1),
+		path: path, logger: logger, write: options.Write, wake: make(chan struct{}, 1),
+		dashboardReadings: options.DashboardReadings, thermostatUnit: "°" + defaults.Unit,
 		discovery: make(map[string][]inputSpec), missingSince: make(map[string]time.Time), band: -1,
 		zwaveDevices: make(map[string]inputSpec), zwaveGateways: make(map[string]struct{}),
 		savedState: saved, cutoff: saved.OutdoorResume,
 	}
 	if err != nil {
 		logger.Warn("Could not load external heating settings", "error", err)
-		control.savedState = savedState{Serial: serial, Settings: defaultSettings()}
+		control.savedState = savedState{Serial: serial, Settings: defaults}
 		control.cutoff = false
 		control.lastError = "Could not load saved settings. Saving will replace them."
 	}
@@ -193,8 +209,12 @@ func (c *Control) updateInputs() {
 	selected := make(map[string]*input)
 	topics := append(discoveryTopics(c.Settings.DiscoveryPrefix), zwaveTopics...)
 	activate := func(spec inputSpec) {
-		if spec.Problem != "" || !c.selected(spec) {
+		selectedForControl := c.selected(spec)
+		if spec.Problem != "" || (!selectedForControl && !c.dashboardReadings) {
 			return
+		}
+		if spec.Kind == thermostat && spec.Unit == "" {
+			spec.Unit = c.thermostatUnit
 		}
 		in := c.active[spec.ID]
 		if in == nil || !sameSignal(in.spec, spec) {
@@ -202,6 +222,9 @@ func (c *Control) updateInputs() {
 		}
 		selected[spec.ID] = in
 		topics = append(topics, spec.Value.Topic)
+		if c.dashboardReadings && spec.RoomTemperature.Topic != "" {
+			topics = append(topics, spec.RoomTemperature.Topic)
+		}
 		for _, source := range spec.Availability {
 			topics = append(topics, source.Topic)
 		}
@@ -300,14 +323,25 @@ type command struct {
 func (c *Control) Snapshot() Status {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_, status := c.plan(time.Now())
+	now := time.Now()
+	_, status := c.plan(now)
 	status.Settings.Bands = slices.Clone(status.Settings.Bands)
 	status.Settings.Thermostats = slices.Clone(status.Settings.Thermostats)
 	add := func(spec inputSpec) {
-		status.Inputs = append(status.Inputs, InputStatus{
+		in := c.active[spec.ID]
+		row := InputStatus{
 			ID: spec.ID, Name: spec.Name, Kind: spec.Kind, Topic: spec.Value.Topic, Problem: spec.Problem,
-			Action: c.active[spec.ID].currentAction(),
-		})
+			Action: in.currentAction(), Availability: in.availabilityState(),
+		}
+		var timeout time.Duration
+		if spec.Kind == temperature {
+			timeout = time.Duration(c.Settings.SensorTimeout) * time.Second
+		}
+		if celsius, ok := in.currentTemperature(now, timeout); ok {
+			value := c.Settings.displayTemperature(celsius)
+			row.Temperature = &value
+		}
+		status.Inputs = append(status.Inputs, row)
 	}
 	for _, specs := range c.discovery {
 		for _, spec := range specs {

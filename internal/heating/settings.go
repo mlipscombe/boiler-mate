@@ -136,8 +136,8 @@ type savedState struct {
 	LastPowerKey  string    `json:"lastPowerKey"`
 }
 
-func load(path, serial string) (savedState, error) {
-	state := savedState{Serial: serial, Settings: defaultSettings()}
+func load(path, serial string, defaults Settings) (savedState, error) {
+	state := savedState{Serial: serial, Settings: defaults}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return state, nil

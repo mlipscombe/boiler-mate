@@ -69,7 +69,9 @@ func Run(parent context.Context, cfg config.Config, logger *slog.Logger) error {
 			})
 		}
 	}
-	external := heating.New(cfg.WebData, boiler.Serial, logger, writeHeating)
+	external := heating.New(cfg.WebData, boiler.Serial, logger, heating.Options{
+		Write: writeHeating, DashboardReadings: cfg.WebBind != "false", ThermostatUnit: cfg.MQTTThermostatUnit,
+	})
 	watchHeating := cfg.WebBind != "false" || external.Enabled()
 	if watchHeating {
 		watch := client.WatchTopics(func(_ *mqtt.Client, message mqtt.Message) {

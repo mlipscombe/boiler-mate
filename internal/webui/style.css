@@ -192,6 +192,95 @@
   .signal-chooser label { @apply flex cursor-pointer items-start gap-1.5 text-sm; }
   .signal-chooser input { @apply mt-1 accent-accent; }
 
+  .heating-page { @apply grid gap-4; }
+  .heating-summary {
+    @apply overflow-hidden rounded-xl border border-slate-900 text-white;
+    background: linear-gradient(115deg, #182941, #213d64);
+  }
+  .heating-summary-top { @apply flex flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-5; }
+  .heating-state { @apply inline-flex items-center gap-2 text-base font-semibold leading-snug tracking-tight; }
+  .heating-state::before { @apply size-2 shrink-0 rounded-full bg-slate-300; content: ""; }
+  .heating-state[data-state="active"]::before { @apply bg-emerald-300; }
+  .heating-state[data-state="cutoff"]::before { @apply bg-amber-300; }
+  .heating-decision, .heating-readonly { @apply mt-1 text-sm leading-snug text-blue-100; }
+  .heating-decision:empty { display: none; }
+  .heating-readonly { @apply mx-4 mb-4 mt-0 sm:mx-5; }
+  .heating-enable {
+    @apply inline-flex min-h-10 shrink-0 cursor-pointer items-center gap-3 rounded-lg border border-white/25 bg-white/10 px-3 text-sm font-medium whitespace-nowrap;
+  }
+  .heating-switch {
+    @apply relative h-5 w-9 shrink-0 cursor-pointer appearance-none rounded-full border border-white/35 bg-slate-600 transition-colors checked:border-blue-200 checked:bg-blue-500 disabled:cursor-default disabled:opacity-60;
+  }
+  .heating-switch::before {
+    @apply absolute top-0.5 left-0.5 size-3.5 rounded-full bg-white transition-transform;
+    content: "";
+  }
+  .heating-switch:checked::before { @apply translate-x-4; }
+  .heating-switch:focus-visible { @apply outline-white; }
+  .heating-live { @apply grid border-t border-white/20 bg-black/10 sm:grid-cols-3; }
+  .heating-live > div { @apply flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 px-4 py-2.5 sm:block sm:px-5 sm:py-3; }
+  .heating-live > div + div { @apply border-t border-white/15 sm:border-t-0 sm:border-l; }
+  .heating-live dt { @apply text-xs font-medium text-blue-100; }
+  .heating-live dd { @apply text-sm font-semibold tracking-tight sm:mt-0.5 sm:text-base; }
+  .heating-notices:empty, .heating-error:empty { display: none; }
+  .heating-notices { @apply rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-alert; }
+  .heating-layout { @apply grid items-start gap-4 lg:grid-cols-2; }
+  .heating-column { @apply grid min-w-0 gap-4; }
+  .heating-panel { @apply min-w-0 rounded-xl border border-border bg-surface p-4 sm:p-5; }
+  .heating-panel-head { @apply mb-4 flex flex-wrap items-start justify-between gap-x-4 gap-y-2; }
+  .heating-panel-head > div { @apply min-w-0 flex-1; }
+  .heating-panel-head h2 { @apply text-base font-semibold tracking-tight; }
+  .heating-panel-head p, .heating-hint { @apply mt-1 text-sm leading-relaxed text-muted; }
+  .heating-selected { @apply shrink-0 rounded-full bg-accent-soft px-2.5 py-1 text-xs font-semibold text-accent; }
+  .heating-device-list { @apply grid gap-2; }
+  .heating-device {
+    @apply grid min-h-14 cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2.5 rounded-lg border border-border bg-rail px-2.5 py-2 hover:border-blue-200 sm:gap-3 sm:px-3;
+  }
+  .heating-device:has(input:checked) { @apply border-blue-200 bg-accent-soft; }
+  .heating-device:has(input:disabled) { @apply cursor-default; }
+  .heating-device-check { @apply size-4 shrink-0 cursor-pointer accent-accent disabled:cursor-default; }
+  .heating-device-label { @apply grid min-w-0 gap-0.5; }
+  .heating-device-label strong { @apply text-sm font-semibold leading-tight wrap-anywhere; }
+  .heating-device-state { @apply inline-flex items-center gap-1.5 text-xs leading-tight text-muted; }
+  .heating-device-state::before { @apply size-1.5 shrink-0 rounded-full bg-slate-400; content: ""; }
+  .heating-device-state[data-state="heating"] { @apply font-semibold text-alert; }
+  .heating-device-state[data-state="heating"]::before { @apply bg-amber-600; }
+  .heating-device-state[data-state="offline"]::before { @apply bg-red-600; }
+  .heating-device-temp { @apply text-right text-sm font-semibold whitespace-nowrap sm:text-base; }
+  .heating-field { @apply grid min-w-0 gap-1.5; }
+  .heating-field label { @apply text-xs font-semibold leading-tight text-muted; }
+  .heating-field .field-input, .heating-band .field-input { @apply min-h-10 rounded-lg px-2.5; }
+  .heating-field-pair { @apply grid grid-cols-2 gap-2.5 sm:gap-3; }
+  .heating-sensor-fields { @apply grid-cols-[minmax(0,1fr)_4.75rem]; }
+  .heating-cutoff-fields { @apply mt-3; }
+  .heating-hint { @apply mt-2 text-xs; }
+  .heating-advanced { @apply overflow-hidden rounded-xl border border-border bg-surface; }
+  .heating-advanced summary { @apply px-4 py-3 text-sm font-semibold text-ink sm:px-5; }
+  .heating-advanced-body { @apply grid gap-3 border-t border-border px-4 py-3 sm:px-5; }
+  .heating-quiet { @apply min-h-9 justify-self-start rounded-md px-2 text-sm font-semibold text-accent hover:bg-accent-soft; }
+  .heating-bands { @apply grid gap-2; }
+  .heating-band-empty { @apply rounded-lg border border-dashed border-border bg-rail px-3.5 py-3 text-sm text-muted; }
+  .heating-band {
+    @apply grid grid-cols-[minmax(0,1fr)_5.2rem_2rem] items-center gap-2 rounded-lg border border-border bg-rail px-2.5 py-2 sm:gap-3 sm:px-3;
+  }
+  .heating-band-range { @apply block text-xs font-semibold text-muted; }
+  .heating-band-base .heating-band-range { @apply text-sm text-ink; }
+  .heating-band-bounds { @apply block min-w-0 text-xs leading-tight text-muted; }
+  .heating-band-from:has(input:not([hidden])) { @apply my-1; }
+  .heating-band-from .field-input { @apply max-w-27; }
+  .heating-band-limit { @apply flex min-w-0 items-center gap-1 text-sm font-semibold text-muted; }
+  .heating-band-remove {
+    @apply grid size-8 place-items-center rounded-md border border-border bg-surface text-xl leading-none text-muted hover:border-red-200 hover:bg-red-50 hover:text-red-800;
+  }
+  .heating-save {
+    @apply flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-surface px-3 py-2.5 sm:px-4;
+  }
+  .heating-save[data-dirty="true"] { @apply sticky bottom-2 z-10 shadow-md; }
+  .heating-draft { @apply text-sm font-medium text-muted; }
+  .heating-error { @apply mt-0.5 text-sm text-red-800; }
+  .heating-save-actions { @apply ml-auto flex items-center gap-1 sm:gap-2; }
+  .heating-save-actions .primary { @apply min-h-9; }
+
   dialog {
     @apply max-w-[min(30rem,calc(100vw-2rem))] rounded-lg border border-border bg-surface p-5 text-ink shadow-xl;
     margin: auto;

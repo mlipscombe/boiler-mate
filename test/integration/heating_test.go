@@ -124,7 +124,12 @@ func TestExternalHeatingWithMosquitto(t *testing.T) {
 	write(settings)
 	waitHeating(t, "retained thermostat and temperature discovery", func() bool {
 		state, _ := read()
-		return len(state.Inputs) == 2
+		var heat, outside bool
+		for _, input := range state.Inputs {
+			heat = heat || input.ID == thermostat && input.Action == "heating"
+			outside = outside || input.ID == sensor+"#outdoor" && input.Temperature != nil && *input.Temperature == 16
+		}
+		return heat && outside && !state.Settings.Enabled && len(state.Settings.Thermostats) == 0
 	})
 	settings.Enabled, settings.Thermostats = true, []string{thermostat}
 	settings.OutdoorSensor = sensor + "#outdoor"

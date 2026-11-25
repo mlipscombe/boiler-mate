@@ -49,7 +49,8 @@ func zwaveThermostat(topic, node, endpoint string) inputSpec {
 	}
 	return inputSpec{
 		ID: topic, Name: name, Kind: thermostat, Mode: "all", ZWave: true,
-		Value: valueSource{Topic: topic, Field: "value", FallbackRaw: true},
+		Value:           valueSource{Topic: topic, Field: "value", FallbackRaw: true},
+		RoomTemperature: valueSource{Topic: node + "/sensor_multilevel/endpoint_" + endpoint + "/Air_temperature", Field: "value", FallbackRaw: true},
 	}
 }
 
