@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	_ "time/tzdata" // The scratch image has no zoneinfo files for the controller clock.
 
 	"github.com/mlipscombe/boiler-mate/config"
 	"github.com/mlipscombe/boiler-mate/internal/bridge"

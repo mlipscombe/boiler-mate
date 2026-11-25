@@ -529,16 +529,18 @@ func TestControllerListsFromSimulatedBoiler(t *testing.T) {
 	}
 
 	for path, want := range map[string]string{
-		"/api/controller/events":               `{"time":`,
-		"/api/controller/events?at=1732442400": `"date":"241124","clock":"101500","type":0,"fields":["12","60","65"]}`,
-		"/api/controller/versions":             `[{"date":"150203","version":"0616","releaseType":"0"},`,
-		"/api/controller/sensors":              `{"mac":"00:11:22:33:44:55","temperature":21.5,"battery":3.1,"timeout":3600,"secondsSinceReading":42,"unknown":"0","transmissionsSent":128}`,
+		"/api/controller/events":                                             `{"time":`,
+		"/api/controller/events?at=1732442400":                               `"date":"241124","clock":"101500","type":0,"fields":["12","60","65"]}`,
+		"/api/controller/values?names=boiler_temp,state":                     `"boiler_temp":62.50`,
+		"/api/controller/chart?from=1732442200&to=1732442400&step=1&ids=0,3": `"values":[0,3]`,
+		"/api/controller/versions":                                           `[{"date":"150203","version":"0616","releaseType":"0"},`,
+		"/api/controller/sensors":                                            `{"mac":"00:11:22:33:44:55","temperature":21.5,"battery":3.1,"timeout":3600,"secondsSinceReading":42,"unknown":"0","transmissionsSent":128}`,
 	} {
 		if result := get(path); result.Code != http.StatusOK || !strings.Contains(result.Body.String(), want) {
 			t.Errorf("%s = %d %s, want %s", path, result.Code, result.Body.String(), want)
 		}
 	}
-	for _, path := range []string{"/api/controller/events?at=soon", "/api/controller/events?at=-5", "/api/controller/events?at=99999999999"} {
+	for _, path := range []string{"/api/controller/events?at=soon", "/api/controller/events?at=-5", "/api/controller/events?at=99999999999", "/api/controller/chart?ids=1", "/api/controller/values?names=a,a"} {
 		if result := get(path); result.Code != http.StatusBadRequest {
 			t.Errorf("%s = %d %s", path, result.Code, result.Body.String())
 		}

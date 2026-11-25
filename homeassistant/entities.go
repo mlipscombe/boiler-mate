@@ -21,6 +21,10 @@ package homeassistant
 func AllEntities() []EntityConfig {
 	return []EntityConfig{
 		// Sensors
+		{Key: "available_firmware_versions", Name: "Available Firmware Versions", EntityType: Sensor,
+			EntityCategory: "diagnostic", Unit: "versions", StateTopic: "controller/versions_count", AttributesTopic: "controller/versions"},
+		{Key: "wireless_room_sensors", Name: "Wireless Room Sensors", EntityType: Sensor,
+			EntityCategory: "diagnostic", Unit: "sensors", StateTopic: "controller/sensors_count", AttributesTopic: "controller/sensors"},
 		{
 			Key:            "ip_address",
 			Name:           "IP Address",

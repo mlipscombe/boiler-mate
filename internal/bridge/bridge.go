@@ -50,6 +50,9 @@ func Run(parent context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 	httpErrors := make(chan error, 1)
 	var workers sync.WaitGroup
+	client := broker.Open(ctx, logger, "nbemqtt-"+boiler.Serial, prefix)
+	defer client.Close()
+	reads := newControllerReads(boiler, client, logger)
 	var ui *webui.UI
 	if cfg.WebBind != "false" {
 		var write webui.WriteFunc
@@ -57,7 +60,7 @@ func Run(parent context.Context, cfg config.Config, logger *slog.Logger) error {
 			write = queue.write
 		}
 		ui, err = webui.New(ctx, logger, boiler, boiler.Serial, cfg.WebData, webui.Options{
-			Write: write, OutdoorWeatherFahrenheit: cfg.OutdoorWeatherFahrenheit,
+			ReadController: reads.read, Write: write, OutdoorWeatherFahrenheit: cfg.OutdoorWeatherFahrenheit,
 		})
 		if err != nil {
 			return err
@@ -72,12 +75,14 @@ func Run(parent context.Context, cfg config.Config, logger *slog.Logger) error {
 		}
 	}
 
-	client := broker.Open(ctx, logger, "nbemqtt-"+boiler.Serial, prefix)
-	defer client.Close()
 	defer func() {
 		cancel()
 		workers.Wait()
 	}()
+	if err := reads.subscribe(prefix); err != nil {
+		return err
+	}
+	workers.Go(func() { reads.run(ctx) })
 	if writesEnabled {
 		if err := queue.subscribe(ctx, logger, client, prefix); err != nil {
 			return err

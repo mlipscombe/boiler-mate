@@ -153,6 +153,9 @@ func verifyBridge(t *testing.T, enableWrites bool) {
 		t.Errorf("temperature history missing: %s", got)
 	}
 
+	if !enableWrites {
+		verifyControllerReads(t, observer, prefix)
+	}
 	if writes := device.WriteAttempts(); writes != 0 {
 		t.Fatalf("%d settings writes reached the simulator", writes)
 	}
@@ -183,6 +186,41 @@ func verifyBridge(t *testing.T, enableWrites bool) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Error("bridge did not publish offline status")
+	}
+}
+
+func verifyControllerReads(t *testing.T, observer paho.Client, prefix string) {
+	t.Helper()
+	replies := make(chan paho.Message, 32)
+	checkToken(t, observer.Subscribe(prefix+"/controller/+", 1, func(_ paho.Client, msg paho.Message) {
+		replies <- msg
+	}))
+	for _, tc := range []struct{ kind, query, topic, want string }{
+		{"versions", "", "versions", `"version":"0616"`},
+		{"sensors", "", "sensors", `"temperature":21.5`},
+		{"events", "", "events", `"type":0`},
+		{"events", "at=1732442400", "event_history", `"query":"at=1732442400"`},
+		{"values", "names=boiler_temp,state", "values", `"boiler_temp":62.50`},
+		{"chart", "from=1732442200&to=1732442400&ids=0,3", "chart", `"values":[0,3]`},
+		{"values", "names=a,a", "values", `"error":`},
+	} {
+		checkToken(t, observer.Publish(prefix+"/get/controller/"+tc.kind, 1, false, tc.query))
+		timeout := time.After(4 * time.Second)
+	waitReply:
+		for {
+			select {
+			case msg := <-replies:
+				if msg.Topic() != prefix+"/controller/"+tc.topic {
+					continue
+				}
+				if !strings.Contains(string(msg.Payload()), tc.want) {
+					t.Fatalf("%s returned %s", tc.kind, msg.Payload())
+				}
+				break waitReply
+			case <-timeout:
+				t.Fatalf("no MQTT response for %s", tc.kind)
+			}
+		}
 	}
 }
 

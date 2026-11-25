@@ -12,11 +12,13 @@ import (
 	"maps"
 	"mime"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/mlipscombe/boiler-mate/internal/controllerread"
 	"github.com/mlipscombe/boiler-mate/nbe"
 )
 
@@ -30,11 +32,13 @@ type controller interface {
 type WriteFunc func(context.Context, string, []byte) error
 
 type Options struct {
+	ReadController           controllerread.ReadFunc
 	Write                    WriteFunc
 	OutdoorWeatherFahrenheit bool
 }
 
 type UI struct {
+	read                     controllerread.ReadFunc
 	controller               controller
 	write                    WriteFunc
 	store                    *store
@@ -71,7 +75,13 @@ func New(ctx context.Context, logger *slog.Logger, boiler controller, serial, da
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("initialize web push: %w", err), store.db.Close())
 	}
+	if options.ReadController == nil {
+		options.ReadController = func(ctx context.Context, kind string, q url.Values) (any, error) {
+			return controllerread.Read(ctx, boiler, kind, q)
+		}
+	}
 	return &UI{
+		read:       options.ReadController,
 		controller: boiler, write: options.Write, store: store, logger: logger, serial: serial,
 		push:                     push,
 		outdoorWeatherFahrenheit: options.OutdoorWeatherFahrenheit,
@@ -229,9 +239,7 @@ func (ui *UI) Handler() http.Handler {
 	router.HandleFunc("GET /api/history/performance", ui.performanceHistoryHandler(false))
 	router.HandleFunc("GET /api/consumption", ui.getConsumption)
 	router.HandleFunc("GET /api/events", ui.getEvents)
-	router.HandleFunc("GET /api/controller/events", ui.getControllerEvents)
-	router.HandleFunc("GET /api/controller/versions", ui.getControllerVersions)
-	router.HandleFunc("GET /api/controller/sensors", ui.getRemoteSensors)
+	router.HandleFunc("GET /api/controller/{kind}", ui.getControllerRead)
 	router.HandleFunc("GET /api/notifications", ui.getNotices)
 	router.HandleFunc("GET /api/notifications/stream", ui.streamNotices)
 	router.HandleFunc("GET /api/notifications/push-key", ui.getPushKey)

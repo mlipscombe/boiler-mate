@@ -54,6 +54,22 @@ Set `BOILER_MATE_OUTDOOR_WEATHER_FAHRENHEIT=true` when the online outdoor weathe
 
 Enable desktop notices under **Events → Desktop notifications** on each browser that should receive them. On browsers with Web Push, notices can arrive after the dashboard tab closes. The server needs outbound HTTPS to the browser's push service and sends encrypted notice payloads. The web data directory stores the push identity and subscriptions alongside dashboard history.
 
+### Controller reads in the dashboard and MQTT
+
+Open **Charts → Controller history** for chart IDs stored by the boiler, **Events → Controller log** for its event log, **Live data → Selected readings** for a one-time group of operating values, or **System → Firmware versions / Wireless sensors** for controller lists. Firmware and hardware determine which reads succeed. Chart IDs have controller-specific meanings.
+
+Subscribe to `<prefix>/controller/+` for retained JSON results. Each result includes `read_at`, the URL-encoded `query`, and either `data` or `error`. To request a read, publish a non-retained message to `<prefix>/get/controller/<name>`. These reads work with controller writes disabled.
+
+| Name | Request payload | Result topic under `<prefix>/controller/` |
+| --- | --- | --- |
+| `versions` | Empty | `versions` |
+| `sensors` | Empty | `sensors` |
+| `events` | Empty for recent events, or `at=1732442400` for a Unix timestamp | `events` or `event_history` for a dated request |
+| `values` | `names=boiler_temp,state` | `values` |
+| `chart` | `from=1732442200&to=1732442400&step=1&ids=0,3` | `chart` |
+
+Chart bounds are Unix timestamps on the same controller-local day. Step is in minutes and IDs are in ascending order. The bridge refreshes firmware versions hourly and recent events and room sensors approximately once a minute. Chart and selected-value reads run on request. Dashboard reads also publish their results to MQTT. Home Assistant discovery adds firmware-version and wireless-sensor counts with the full results in their attributes. A failed list read clears its count to unknown.
+
 ### Frontend development
 
 The binary embeds the precompiled Tailwind CSS and JavaScript. After editing the frontend, rebuild the stylesheet with Node.js 26 and commit the generated CSS alongside the source.

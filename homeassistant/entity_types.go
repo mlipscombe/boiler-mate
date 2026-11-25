@@ -31,21 +31,22 @@ const (
 
 // EntityConfig represents a Home Assistant entity configuration
 type EntityConfig struct {
-	Key            string
-	Name           string
-	EntityType     EntityType
-	EntityCategory string
-	DeviceClass    string
-	Icon           string
-	Unit           string
-	StateTopic     string
-	CommandTopic   string
-	Precision      int
-	MinValue       interface{}
-	MaxValue       interface{}
-	Step           float64
-	Mode           string
-	PayloadPress   string
+	Key             string
+	Name            string
+	EntityType      EntityType
+	EntityCategory  string
+	DeviceClass     string
+	Icon            string
+	Unit            string
+	StateTopic      string
+	AttributesTopic string
+	CommandTopic    string
+	Precision       int
+	MinValue        interface{}
+	MaxValue        interface{}
+	Step            float64
+	Mode            string
+	PayloadPress    string
 }
 
 // Build creates the MQTT discovery message for this entity
@@ -92,6 +93,10 @@ func (e *EntityConfig) Build(serial, prefix string, devBlock map[string]interfac
 			// Relative path
 			config["stat_t"] = fmt.Sprintf("%s/%s", prefix, e.StateTopic)
 		}
+	}
+
+	if e.AttributesTopic != "" {
+		config["json_attributes_topic"] = prefix + "/" + e.AttributesTopic
 	}
 
 	// Command topic (for numbers, switches, buttons)

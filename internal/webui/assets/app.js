@@ -501,7 +501,7 @@ function charts(token) {
     chosenSignals=selection; saveLocal('signals',selection); choose(); load();
   },{limit:8});
   main.replaceChildren(heading('Charts','Compare live signals recorded by Boiler Mate. History starts when this instance is enabled.'),
-    card('Signal history','Each signal keeps its own unit.',
+    controllerTabs('charts','recorded'),card('Signal history','Each signal keeps its own unit.',
       dom('div',{class:'toolbar'},dom('label',{},'Period',range),csv),
       chartBody,dom('details',{open:true},dom('summary',{},'Select signals'),signals)));
   refreshPageHistory = ()=>load(false);
@@ -519,7 +519,7 @@ function chartBounds(series) {
   const margin = Math.max((maxY-minY)*.07, .1);
   return {minX,maxX:maxX===minX?minX+1:maxX,minY:minY-margin,maxY:maxY+margin};
 }
-function showChart(target,data,duration,{size='',names={},seriesColors={},axes={},maxGap=Infinity}={}) {
+function showChart(target,data,duration,{size='',names={},seriesColors={},axes={},maxGap=Infinity,endTime}={}) {
   const entries = Object.entries(data).filter(([,points])=>points.length);
   chartRenderers.delete(target);
   if(!entries.length){target.replaceChildren(empty('No readings in this period yet.'));return;}
@@ -612,7 +612,7 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes={
     const ctx=visual.getContext('2d');
     ctx.scale(dpr,dpr);
     const bounds=chartBounds(entries.map(([,points])=>points));
-    const newest=Math.floor(Date.now()/1000);
+    const newest=endTime??Math.floor(Date.now()/1000);
     bounds.minX=Math.min(bounds.minX,newest-duration);
     bounds.maxX=Math.max(bounds.maxX,newest);
     const step=chartStep((bounds.maxY-bounds.minY)/4);
@@ -862,7 +862,7 @@ function activity(token,initialFilter,notificationsOpen) {
     }
   };
   filter.addEventListener('change',()=>load('reset'));
-  main.replaceChildren(heading('Events'),dom('div',{class:'stack'},
+  main.replaceChildren(heading('Events'),dom('div',{class:'stack'},controllerTabs('events','activity'),
     dom('section',{class:'card'},desktopNotifications(notificationsOpen)),
     dom('section',{class:'card'},dom('div',{class:'toolbar'},filter),entries,more)));
   refreshPageEvents=refreshEvents;
@@ -1082,7 +1082,7 @@ function updateReadings() {
 function readingsPage() {
   const filter=dom('input',{id:'readings-filter',type:'search',class:'field-input lookup',
     'aria-label':'Filter readings',placeholder:'Filter readings',oninput:updateReadings});
-  main.replaceChildren(heading('Live data'),dom('section',{class:'card'},
+  main.replaceChildren(heading('Live data'),controllerTabs('live-data','all'),dom('section',{class:'card'},
     dom('div',{class:'toolbar'},filter,dom('span',{id:'reading-time'})),dom('div',{id:'reading-table'})));
   updateReadings();
 }
@@ -1132,6 +1132,7 @@ function settingsPage(id,group,token) {
     btn('Refresh readings',async()=>{await refresh();renderPage();}));
   main.replaceChildren(heading(title,description,actions),
     dom('div',{class:'stack'},
+      id==='system'&&controllerTabs('system','controller'),
       dom('div',{class:'grid metrics'},metrics[id].map(key=>metric(key))),
       card('Controller settings',status.control?'Changes are sent to the controller after confirmation.':'You can view settings in read-only mode.',tablist,controls)));
   load();
@@ -1244,8 +1245,10 @@ function renderPage() {
   const sections=groups[page]?.[2] ?? (page==='consumption'?consumptionPeriods:[]);
   const [section,sectionLabel]=sections.find(([id,,slug=id])=>slug===requestedSection) ?? sections[0] ?? [];
   const token=++generation;
-  renderNavigation(requestedSection?sectionLabel:null);
-  if (groups[page]) settingsPage(page,section,token);
+  const readSection=controllerSections[page]?.slice(1).find(([kind])=>kind===requestedSection);
+  renderNavigation(readSection?.[1]??(requestedSection?sectionLabel:null));
+  if(readSection)controllerReadPage(page,readSection[0],token);
+  else if (groups[page]) settingsPage(page,section,token);
   else if (page==='live-data') readingsPage();
   else if (page==='overview') overview(token);
   else if (page==='charts') charts(token);
