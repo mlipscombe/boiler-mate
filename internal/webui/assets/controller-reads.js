@@ -68,7 +68,7 @@ function controllerReadPage(pageID, kind, token) {
     const from = input('From','datetime-local',localDateInput(start),{required:true});
     const to = input('To','datetime-local',localDateInput(now),{required:true});
     const ids = input('Chart IDs','text','0',{required:true,placeholder:'0, 3, 7'});
-    const step = input('Step (minutes)','number','5',{min:1,max:1440,required:true});
+    const step = input('Step (minutes)','number','1',{min:1,max:1440,required:true});
     params = ()=>{
       const idsText = ids.value.split(',').map(s=>s.trim()).join(',');
       if(!/^\d+(,\d+)*$/.test(idsText)) throw new Error('Enter chart IDs separated by commas.');
@@ -80,14 +80,17 @@ function controllerReadPage(pageID, kind, token) {
     const graph = dom('div');
     render = (rows,query)=>{
       const ids = query.get('ids').split(',');
-      const data = Object.fromEntries(ids.map((id,i)=>['Chart '+id,rows.filter(r=>r.time)
-        .map(r=>({time:r.time,value:r.values[i]})).sort((a,b)=>a.time-b.time)]));
+      const sampleOrder = rows.some(row=>!row.time);
+      const data = Object.fromEntries(ids.map((id,i)=>['Chart '+id,rows
+        .map((r,index)=>({time:sampleOrder?index+1:r.time,value:r.values[i]})).sort((a,b)=>a.time-b.time)]));
       graph.replaceChildren();
       chartRenderers.delete(graph);
-      output.replaceChildren(graph,readTable(['Time',...Object.keys(data)],rows.map(r=>[
-        r.time?new Date(r.time*1000).toLocaleString():r.rawTime,...r.values]),'No controller samples in this period.'));
-      if(rows.some(r=>r.time)) showChart(graph,data,Number(query.get('to'))-Number(query.get('from')),
-        {endTime:Number(query.get('to')),names:Object.fromEntries(Object.keys(data).map(k=>[k,k]))});
+      const table = readTable(['Sample','Time',...Object.keys(data)],rows.map((r,index)=>[
+        index+1,r.time?new Date(r.time*1000).toLocaleString():'—',...r.values]),'No controller samples in this period.');
+      output.replaceChildren(graph,table);
+      if(sampleOrder)graph.before(dom('p',{class:'muted'},'Some timestamps are missing. Samples are plotted in the order received.'));
+      if(rows.length) showChart(graph,data,Number(query.get('to'))-Number(query.get('from')),
+        {sampleOrder,endTime:Number(query.get('to')),names:Object.fromEntries(Object.keys(data).map(k=>[k,k]))});
     };
   }
   const submit = dom('button',{type:'submit',class:'secondary'},

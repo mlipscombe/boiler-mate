@@ -519,7 +519,7 @@ function chartBounds(series) {
   const margin = Math.max((maxY-minY)*.07, .1);
   return {minX,maxX:maxX===minX?minX+1:maxX,minY:minY-margin,maxY:maxY+margin};
 }
-function showChart(target,data,duration,{size='',names={},seriesColors={},axes={},maxGap=Infinity,endTime}={}) {
+function showChart(target,data,duration,{size='',names={},seriesColors={},axes={},maxGap=Infinity,endTime,sampleOrder=false}={}) {
   const entries = Object.entries(data).filter(([,points])=>points.length);
   chartRenderers.delete(target);
   if(!entries.length){target.replaceChildren(empty('No readings in this period yet.'));return;}
@@ -568,7 +568,7 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes={
     if(!view)return;
     const time=times[next];
     if(visual.dataset.cursorTime!==String(time)){
-      tooltip.replaceChildren(dom('div',{class:'chart-tooltip-time'},datetime.format(new Date(time*1000))),
+      tooltip.replaceChildren(dom('div',{class:'chart-tooltip-time'},sampleOrder?'Sample '+time:datetime.format(new Date(time*1000))),
         ...samples.get(time).map(({key,value,i})=>dom('div',{class:'chart-tooltip-row'},
           dom('span',{},swatch(key,i),label(key)),dom('strong',{},withUnit(value,unitSignal(key))))));
       visual.dataset.cursorTime=time;
@@ -612,9 +612,11 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes={
     const ctx=visual.getContext('2d');
     ctx.scale(dpr,dpr);
     const bounds=chartBounds(entries.map(([,points])=>points));
-    const newest=endTime??Math.floor(Date.now()/1000);
-    bounds.minX=Math.min(bounds.minX,newest-duration);
-    bounds.maxX=Math.max(bounds.maxX,newest);
+    if(!sampleOrder){
+      const newest=endTime??Math.floor(Date.now()/1000);
+      bounds.minX=Math.min(bounds.minX,newest-duration);
+      bounds.maxX=Math.max(bounds.maxX,newest);
+    }
     const step=chartStep((bounds.maxY-bounds.minY)/4);
     bounds.minY=Math.floor(bounds.minY/step)*step;
     bounds.maxY=Math.ceil(bounds.maxY/step)*step;
@@ -643,14 +645,15 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes={
     }
     const formatTime = duration<=86400?shorttime:new Intl.DateTimeFormat(undefined,
       duration>=365*86400?{month:'short',year:'numeric'}:{month:'short',day:'numeric'});
-    const ticks=chartTimeTicks(bounds.minX,bounds.maxX,x1-x0);
+    const ticks=sampleOrder?times.filter((_,i)=>i===0||i===times.length-1||
+      i%Math.max(1,Math.ceil(times.length*90/(x1-x0)))===0):chartTimeTicks(bounds.minX,bounds.maxX,x1-x0);
     for(const [i,tick] of ticks.entries()){
       const x=x0+(tick-bounds.minX)*(x1-x0)/(bounds.maxX-bounds.minX);
       if(i>0&&i<ticks.length-1){
         ctx.strokeStyle='#edf0f4';ctx.beginPath();ctx.moveTo(x,y0);ctx.lineTo(x,y1);ctx.stroke();
       }
       ctx.textAlign=i===0?'left':i===ticks.length-1?'right':'center';
-      ctx.fillText(formatTime.format(new Date(tick*1000)),x,height-6);
+      ctx.fillText(sampleOrder?'#'+tick:formatTime.format(new Date(tick*1000)),x,height-6);
     }
     ctx.save();
     ctx.beginPath();
