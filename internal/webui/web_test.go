@@ -349,6 +349,35 @@ func TestUnifiedEventFilters(t *testing.T) {
 	}
 }
 
+func TestStartupOxygenInformationEvent(t *testing.T) {
+	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ui.Close() })
+
+	const legacy = "Controller information code 16"
+	const want = "Startup offset applied to the oxygen target."
+	if message := infoMessage("16"); message != want {
+		t.Fatalf("new information event: got %q, want %q", message, want)
+	}
+	for _, kind := range []string{"info", "alarm"} {
+		if err := ui.store.addEvent(t.Context(), time.Now(), kind, legacy); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	response := httptest.NewRecorder()
+	ui.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/events", nil))
+	var rows []event
+	if err := json.Unmarshal(response.Body.Bytes(), &rows); err != nil || response.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s, error %v", response.Code, response.Body.String(), err)
+	}
+	if len(rows) != 2 || rows[0].Message != legacy || rows[1].Message != want {
+		t.Fatalf("incorrect event messages: %+v", rows)
+	}
+}
+
 func TestStatusStream(t *testing.T) {
 	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", t.TempDir(), Options{})
 	if err != nil {
