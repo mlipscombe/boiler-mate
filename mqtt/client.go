@@ -48,6 +48,7 @@ type Client struct {
 
 	mu            sync.Mutex
 	subscriptions map[string]*subscriptionInfo
+	watch         *TopicWatch
 	retained      map[string][]byte
 	changed       chan struct{}
 	cancel        context.CancelFunc
@@ -57,6 +58,16 @@ type Client struct {
 type subscriptionInfo struct {
 	qos      byte
 	callback MessageHandler
+	optional bool
+}
+
+// TopicWatch follows external topics on the bridge's MQTT connection. Its
+// subscriptions are independent of the boiler topic prefix.
+type TopicWatch struct {
+	client       *Client
+	subscription *subscriptionInfo
+	topics       map[string]*subscriptionInfo
+	disconnected func()
 }
 
 type Message mqtt.Message
@@ -155,6 +166,31 @@ func (client *Client) Subscribe(topic string, qos byte, callback MessageHandler)
 	return nil
 }
 
+func (client *Client) WatchTopics(callback MessageHandler, disconnected func()) *TopicWatch {
+	watch := &TopicWatch{client: client, disconnected: disconnected,
+		subscription: &subscriptionInfo{qos: 1, callback: callback, optional: true}}
+	client.mu.Lock()
+	client.watch = watch
+	client.mu.Unlock()
+	client.notifyChanged()
+	return watch
+}
+
+func (watch *TopicWatch) SetTopics(topics []string) {
+	updated := make(map[string]*subscriptionInfo, len(topics))
+	for _, topic := range topics {
+		updated[topic] = watch.subscription
+	}
+	client := watch.client
+	client.mu.Lock()
+	changed := !maps.Equal(watch.topics, updated)
+	watch.topics = updated
+	client.mu.Unlock()
+	if changed {
+		client.notifyChanged()
+	}
+}
+
 func (client *Client) notifyChanged() {
 	select {
 	case client.changed <- struct{}{}:
@@ -210,24 +246,62 @@ func (client *Client) serve(ctx context.Context, connection mqtt.Client, lost <-
 	subscribed := make(map[string]*subscriptionInfo)
 	sent := make(map[string][]byte)
 	online := false
+	var callbacks sync.Mutex
+	closed := false
+	defer func() {
+		callbacks.Lock()
+		defer callbacks.Unlock()
+		closed = true
+		client.mu.Lock()
+		watch := client.watch
+		client.mu.Unlock()
+		if watch != nil {
+			watch.disconnected()
+		}
+	}()
 	for {
 		client.mu.Lock()
 		subscriptions := maps.Clone(client.subscriptions)
+		if client.watch != nil {
+			for topic, sub := range client.watch.topics {
+				if subscriptions[topic] == nil {
+					subscriptions[topic] = sub
+				}
+			}
+		}
 		retained := maps.Clone(client.retained)
 		client.mu.Unlock()
 
+		for topic := range subscribed {
+			if subscriptions[topic] == nil {
+				if err := waitForToken(ctx, connection.Unsubscribe(topic), ackTimeout); err != nil {
+					return fmt.Errorf("unsubscribe from %s: %w", topic, err)
+				}
+				delete(subscribed, topic)
+			}
+		}
 		for topic, sub := range subscriptions {
 			if subscribed[topic] == sub {
 				continue
 			}
 			token := connection.Subscribe(topic, sub.qos, func(_ mqtt.Client, msg mqtt.Message) {
+				if sub.optional {
+					callbacks.Lock()
+					defer callbacks.Unlock()
+					if closed {
+						return
+					}
+				}
 				sub.callback(client, msg)
 			})
 			if err := waitForToken(ctx, token, ackTimeout); err != nil {
 				return fmt.Errorf("subscribe to %s: %w", topic, err)
 			}
 			if granted, ok := token.(*mqtt.SubscribeToken).Result()[topic]; !ok || granted > 2 {
-				return fmt.Errorf("MQTT broker rejected subscription to %s", topic)
+				if !sub.optional {
+					return fmt.Errorf("MQTT broker rejected subscription to %s", topic)
+				}
+				client.logger.Warn("MQTT broker rejected external topic subscription", "topic", topic)
 			}
 			subscribed[topic] = sub
 		}

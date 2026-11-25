@@ -19,6 +19,7 @@ type command struct {
 	key    string
 	value  []byte
 	result chan error
+	check  func() error
 }
 
 type commands chan command
@@ -74,7 +75,11 @@ func (queue commands) enqueue(item command) error {
 }
 
 func (queue commands) write(ctx context.Context, key string, value []byte) error {
-	item := command{ctx: ctx, key: key, value: value, result: make(chan error, 1)}
+	return queue.writeChecked(ctx, key, value, nil)
+}
+
+func (queue commands) writeChecked(ctx context.Context, key string, value []byte, check func() error) error {
+	item := command{ctx: ctx, key: key, value: value, result: make(chan error, 1), check: check}
 	if err := queue.enqueue(item); err != nil {
 		return err
 	}
@@ -94,6 +99,12 @@ func (queue commands) run(ctx context.Context, logger *slog.Logger, boiler *nbe.
 		case item := <-queue:
 			if ctx.Err() != nil {
 				return
+			}
+			if item.check != nil {
+				if err := item.check(); err != nil {
+					item.result <- err
+					continue
+				}
 			}
 			_, err := boiler.Set(item.ctx, item.key, item.value)
 			if item.result != nil {

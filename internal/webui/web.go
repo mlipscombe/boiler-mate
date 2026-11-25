@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/mlipscombe/boiler-mate/internal/controllerread"
+	"github.com/mlipscombe/boiler-mate/internal/heating"
 	"github.com/mlipscombe/boiler-mate/nbe"
 )
 
@@ -35,6 +36,7 @@ type Options struct {
 	ReadController           controllerread.ReadFunc
 	Write                    WriteFunc
 	OutdoorWeatherFahrenheit bool
+	Heating                  *heating.Control
 }
 
 type UI struct {
@@ -46,6 +48,7 @@ type UI struct {
 	serial                   string
 	push                     *webPush
 	outdoorWeatherFahrenheit bool
+	heating                  *heating.Control
 
 	settingsMu   sync.Mutex
 	mu           sync.RWMutex
@@ -85,6 +88,7 @@ func New(ctx context.Context, logger *slog.Logger, boiler controller, serial, da
 		controller: boiler, write: options.Write, store: store, logger: logger, serial: serial,
 		push:                     push,
 		outdoorWeatherFahrenheit: options.OutdoorWeatherFahrenheit,
+		heating:                  options.Heating,
 		snapshots:                make(map[string]snapshot), lastSample: make(map[string]time.Time),
 		changed: make(chan struct{}), eventChanged: make(chan struct{}),
 	}, nil
@@ -250,6 +254,8 @@ func (ui *UI) Handler() http.Handler {
 	router.HandleFunc("PUT /api/settings/{group}/{key}", ui.putSetting)
 	router.HandleFunc("POST /api/power", ui.postPower)
 	router.HandleFunc("POST /api/alarm/reset", ui.resetAlarm)
+	router.HandleFunc("GET /api/external-heating", ui.getExternalHeating)
+	router.HandleFunc("PUT /api/external-heating", ui.putExternalHeating)
 	files, err := fs.Sub(assets, "assets")
 	if err != nil {
 		panic(err)

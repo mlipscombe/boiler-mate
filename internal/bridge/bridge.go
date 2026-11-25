@@ -9,11 +9,13 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/mlipscombe/boiler-mate/config"
 	"github.com/mlipscombe/boiler-mate/homeassistant"
+	"github.com/mlipscombe/boiler-mate/internal/heating"
 	"github.com/mlipscombe/boiler-mate/internal/webui"
 	"github.com/mlipscombe/boiler-mate/monitor"
 	"github.com/mlipscombe/boiler-mate/mqtt"
@@ -53,6 +55,28 @@ func Run(parent context.Context, cfg config.Config, logger *slog.Logger) error {
 	client := broker.Open(ctx, logger, "nbemqtt-"+boiler.Serial, prefix)
 	defer client.Close()
 	reads := newControllerReads(boiler, client, logger)
+	var writeHeating heating.WriteFunc
+	if writesEnabled {
+		writeHeating = func(ctx context.Context, key string, value int, current func() bool) error {
+			return queue.writeChecked(ctx, key, []byte(strconv.Itoa(value)), func() error {
+				if !current() {
+					return heating.ErrSuperseded
+				}
+				if key == heating.MaxPower {
+					return checkHeatingPower(ctx, boiler, value, current)
+				}
+				return nil
+			})
+		}
+	}
+	external := heating.New(cfg.WebData, boiler.Serial, logger, writeHeating)
+	watchHeating := cfg.WebBind != "false" || external.Enabled()
+	if watchHeating {
+		watch := client.WatchTopics(func(_ *mqtt.Client, message mqtt.Message) {
+			external.Receive(message.Topic(), message.Payload(), message.Retained())
+		}, external.Disconnected)
+		external.Watch(watch.SetTopics)
+	}
 	var ui *webui.UI
 	if cfg.WebBind != "false" {
 		var write webui.WriteFunc
@@ -61,6 +85,7 @@ func Run(parent context.Context, cfg config.Config, logger *slog.Logger) error {
 		}
 		ui, err = webui.New(ctx, logger, boiler, boiler.Serial, cfg.WebData, webui.Options{
 			ReadController: reads.read, Write: write, OutdoorWeatherFahrenheit: cfg.OutdoorWeatherFahrenheit,
+			Heating: external,
 		})
 		if err != nil {
 			return err
@@ -104,8 +129,13 @@ func Run(parent context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 
 	var observe monitor.Observer
+	if watchHeating {
+		observe = external.Observe
+		workers.Go(func() { external.Run(ctx) })
+	}
 	if ui != nil {
 		observe = func(topic string, values map[string]any) {
+			external.Observe(topic, values)
 			ui.Observe(ctx, topic, values)
 		}
 		workers.Go(func() { ui.Run(ctx) })
@@ -165,6 +195,37 @@ func mqttPrefix(uri *url.URL, serial string) string {
 		return uri.Path[1:]
 	}
 	return "nbe/" + serial
+}
+
+func checkHeatingPower(ctx context.Context, boiler *nbe.NBE, value int, current func() bool) error {
+	response, err := boiler.Get(ctx, nbe.GetSetupRangeFunction, heating.MaxPower)
+	if err != nil {
+		return errors.New("could not read the controller's maximum-power range")
+	}
+	bounds := nbe.ReadSettingRange(response.Payload, "boiler_power_max")
+	if bounds == nil || float64(value) < bounds.Min || float64(value) > bounds.Max {
+		return errors.New("the band is outside the controller's maximum-power range")
+	}
+	response, err = boiler.Get(ctx, nbe.GetSetupFunction, "regulation.*")
+	if err != nil {
+		return errors.New("could not read the controller's current burner limits")
+	}
+	switch minimum := response.Payload["boiler_power_min"].(type) {
+	case int64:
+		if int64(value) < minimum {
+			return errors.New("the band is below the controller's minimum burner power")
+		}
+	case nbe.RoundedFloat:
+		if nbe.RoundedFloat(value) < minimum {
+			return errors.New("the band is below the controller's minimum burner power")
+		}
+	default:
+		return errors.New("the controller did not report its minimum burner power")
+	}
+	if !current() {
+		return heating.ErrSuperseded
+	}
+	return nil
 }
 
 func metricsHandler(registry *prometheus.Registry) http.Handler {

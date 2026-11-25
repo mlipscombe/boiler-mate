@@ -54,6 +54,18 @@ Set `BOILER_MATE_OUTDOOR_WEATHER_FAHRENHEIT=true` when the online outdoor weathe
 
 Enable desktop notices under **Events → Desktop notifications** on each browser that should receive them. On browsers with Web Push, notices can arrive after the dashboard tab closes. The server needs outbound HTTPS to the browser's push service and sends encrypted notice payloads. The web data directory stores the push identity and subscriptions alongside dashboard history.
 
+### External heating
+
+Open **Controller → External heating** to configure automatic control. Pick one or more MQTT thermostats, an outdoor temperature sensor, or both. Save the settings and enable external heating control. Settings are stored in the dashboard data directory and continue to apply across restarts, including if you later turn off the dashboard. Controller writes and a PIN are required for automatic control.
+
+The start and stop commands operate the entire boiler, including domestic hot water production.
+
+- **Thermostats.** Any thermostat reporting `heating` can start the boiler. After ten seconds without a call, Boiler Mate stops it once any missing thermostat's dropout grace has expired. The default grace and minimum interval between automatic start and stop commands are both two minutes. Before receiving its first usable thermostat action, Boiler Mate leaves boiler power alone. For devices that report only state changes, configure the publisher's MQTT availability so Boiler Mate can detect an outage.
+- **Outdoor cutoff.** At or above the cutoff, Boiler Mate stops the boiler even if a thermostat is calling for heat. The cutoff clears after the reading falls by the restart differential. If the sensor goes missing or its reading expires, the last cutoff stays in effect and new starts wait for a usable reading. With no thermostats selected, clearing the cutoff restarts the boiler only if Boiler Mate previously stopped it for that cutoff.
+- **Maximum-power bands.** The first band covers the coldest temperatures. Subsequent bands start at their specified temperatures and apply up to the next band. For example, enter 90% for the coldest band, 70% from 35 °F, and 50% from 50 °F. Boiler Mate allows a 0.5 °C margin at band boundaries to avoid repeated changes. It checks the controller's maximum-power range and current minimum burner power before writing. If the sensor goes missing or the bands are disabled, the last value remains in the controller. You can adjust it under **Boiler → Regulation**.
+
+Boiler Mate reads Home Assistant MQTT discovery on the same broker. It supports MQTT climate entities with an action topic and MQTT temperature sensors reporting °C, °F, or K. Plain payloads, simple JSON field templates, and Zigbee2MQTT's standard climate action mapping are supported. Retain discovery messages and current readings for use after a reconnect, and publish availability separately when the device supports it. Devices with unsupported discovery configurations show the reason on the page. [Home Assistant MQTT discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery) · [MQTT climate actions](https://www.home-assistant.io/integrations/climate.mqtt/#action_topic)
+
 ### Controller reads in the dashboard and MQTT
 
 Open **Charts → Controller history** for chart IDs stored by the boiler, **Events → Controller log** for its event log, **Live data → Selected readings** for a one-time group of operating values, or **System → Firmware versions / Wireless sensors** for controller lists. Firmware and hardware determine which reads succeed. Chart IDs have controller-specific meanings.

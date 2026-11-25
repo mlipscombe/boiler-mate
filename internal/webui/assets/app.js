@@ -9,6 +9,7 @@ const navigation = [
   ['Controller', [
     ['boiler', 'Boiler', '▣'], ['fuel', 'Hopper & feed', '▧'], ['hot-water', 'DHW', '◉'],
     ['weather', 'Weather', '☁'], ['solar', 'Solar', '☼'], ['system', 'System', '⚙'],
+    ['external-heating', 'External heating', '◉'],
   ]],
   ['Resources', [['help', 'Help & information', 'ⓘ']]],
 ];
@@ -1257,6 +1258,7 @@ function renderPage() {
   else if (page==='charts') charts(token);
   else if (page==='consumption') consumption(section,token);
   else if (page==='events') activity(token,hashPage==='messages'?'notices':'',hashPage==='notifications'||requestedSection==='notifications');
+  else if (page==='external-heating') externalHeatingPage(token);
   else helpPage();
 }
 
