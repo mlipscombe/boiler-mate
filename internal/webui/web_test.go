@@ -565,6 +565,15 @@ func TestControllerListsFromSimulatedBoiler(t *testing.T) {
 		}
 	}
 
+	mock.SetRawReply(nbe.CustomRequestFunction, 1, "")
+	if result := get("/api/controller/values?names=boiler_temp,state"); result.Code != http.StatusOK ||
+		!strings.Contains(result.Body.String(), `"boiler_temp":62.50`) || !strings.Contains(result.Body.String(), `"state":`) {
+		t.Errorf("selected values on a controller without compact reads = %d %s", result.Code, result.Body.String())
+	}
+	if result := get("/api/controller/values?names=boiler_temp,unknown_value"); result.Code != http.StatusBadRequest {
+		t.Errorf("missing selected value = %d %s", result.Code, result.Body.String())
+	}
+
 	// The controller's log does not touch the events Boiler Mate records itself.
 	if result := get("/api/events"); result.Code != http.StatusOK || strings.TrimSpace(result.Body.String()) != "[]" {
 		t.Errorf("local events = %d %s", result.Code, result.Body.String())

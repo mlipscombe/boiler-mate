@@ -87,9 +87,28 @@ func Read(ctx context.Context, c Controller, kind string, q url.Values) (any, er
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrQuery, err)
 		}
-		return fetch(ctx, c, nbe.CustomRequestFunction, payload, func(raw string) (map[string]any, error) {
+		values, err := fetch(ctx, c, nbe.CustomRequestFunction, payload, func(raw string) (map[string]any, error) {
 			return nbe.ParseCustomValues(names, raw)
 		})
+		var rejected *nbe.ResponseError
+		if !errors.As(err, &rejected) {
+			return values, err
+		}
+		// Some controllers only expose operating values through function 4.
+		// Take one fresh snapshot so the selected fields describe the same instant.
+		reply, err := c.Get(ctx, nbe.GetOperatingDataFunction, "*")
+		if err != nil {
+			return nil, err
+		}
+		selected := make(map[string]any, len(names))
+		for _, name := range names {
+			value, ok := reply.Payload[name]
+			if !ok {
+				return nil, fmt.Errorf("%w: the controller did not return %q", ErrQuery, name)
+			}
+			selected[name] = value
+		}
+		return selected, nil
 	case "chart":
 		request, err := chartRequest(q)
 		if err != nil {

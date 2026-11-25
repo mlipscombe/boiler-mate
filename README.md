@@ -68,7 +68,7 @@ Subscribe to `<prefix>/controller/+` for retained JSON results. Each result incl
 | `values` | `names=boiler_temp,state` | `values` |
 | `chart` | `from=1732442200&to=1732442400&step=1&ids=0,3` | `chart` |
 
-Chart bounds are Unix timestamps on the same controller-local day. Step is in minutes and IDs are in ascending order. The bridge refreshes firmware versions hourly and recent events and room sensors approximately once a minute. Chart and selected-value reads run on request. Dashboard reads also publish their results to MQTT. Home Assistant discovery adds firmware-version and wireless-sensor counts with the full results in their attributes. A failed list read clears its count to unknown.
+Chart bounds are Unix timestamps on the same controller-local day. Step is in minutes and IDs are in ascending order. The bridge refreshes firmware versions hourly and recent events and room sensors approximately once a minute. Chart and selected-value reads run on request. When a controller declines a compact selected-value read, the bridge extracts the requested fields from one fresh operating-data snapshot. Dashboard reads also publish their results to MQTT. Home Assistant discovery adds firmware-version and wireless-sensor counts with the full results in their attributes. A failed list read clears its count to unknown.
 
 ### Frontend development
 
