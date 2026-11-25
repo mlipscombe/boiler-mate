@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -498,5 +499,75 @@ func TestTimerRange(t *testing.T) {
 		if got := validSettingValue(check.value, bounds, true); got != check.want {
 			t.Errorf("timer %q = %v, want %v", check.value, got, check.want)
 		}
+	}
+}
+
+func TestControllerListsFromSimulatedBoiler(t *testing.T) {
+	mock, err := nbe.NewMockBoiler("SIM123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(mock.Stop)
+	boiler, err := nbe.Open(t.Context(), &url.URL{Scheme: "udp", Host: mock.GetAddr()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(boiler.Close)
+	ui, err := New(t.Context(), slog.Default(), boiler, boiler.Serial, t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ui.Close() })
+	handler := ui.Handler()
+	get := func(path string) *httptest.ResponseRecorder {
+		result := httptest.NewRecorder()
+		handler.ServeHTTP(result, httptest.NewRequest(http.MethodGet, path, nil))
+		return result
+	}
+
+	for path, want := range map[string]string{
+		"/api/controller/events":               `{"time":`,
+		"/api/controller/events?at=1732442400": `"date":"241124","clock":"101500","type":0,"fields":["12","60","65"]}`,
+		"/api/controller/versions":             `[{"date":"150203","version":"0616","releaseType":"0"},`,
+		"/api/controller/sensors":              `{"mac":"00:11:22:33:44:55","temperature":21.5,"battery":3.1,"timeout":3600,"secondsSinceReading":42,"unknown":"0","transmissionsSent":128}`,
+	} {
+		if result := get(path); result.Code != http.StatusOK || !strings.Contains(result.Body.String(), want) {
+			t.Errorf("%s = %d %s, want %s", path, result.Code, result.Body.String(), want)
+		}
+	}
+	for _, path := range []string{"/api/controller/events?at=soon", "/api/controller/events?at=-5", "/api/controller/events?at=99999999999"} {
+		if result := get(path); result.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d %s", path, result.Code, result.Body.String())
+		}
+	}
+
+	for path, function := range map[string]nbe.Function{
+		"/api/controller/events":   nbe.GetEventLogFunction,
+		"/api/controller/versions": nbe.GetAvailableProgramsFunction,
+		"/api/controller/sensors":  nbe.GetRemoteSensorsFunction,
+	} {
+		mock.SetRawReply(function, 0, "")
+		if result := get(path); result.Code != http.StatusOK || strings.TrimSpace(result.Body.String()) != "[]" {
+			t.Errorf("%s with an empty list = %d %s", path, result.Code, result.Body.String())
+		}
+		mock.SetRawReply(function, 0, "unexpected")
+		if result := get(path); result.Code != http.StatusBadGateway || !strings.Contains(result.Body.String(), `"error"`) {
+			t.Errorf("%s with a malformed reply = %d %s", path, result.Code, result.Body.String())
+		}
+		mock.SetRawReply(function, 2, "")
+		if result := get(path); result.Code != http.StatusServiceUnavailable || !strings.Contains(result.Body.String(), `"error"`) {
+			t.Errorf("%s with a rejected request = %d %s", path, result.Code, result.Body.String())
+		}
+	}
+
+	// The controller's log does not touch the events Boiler Mate records itself.
+	if result := get("/api/events"); result.Code != http.StatusOK || strings.TrimSpace(result.Body.String()) != "[]" {
+		t.Errorf("local events = %d %s", result.Code, result.Body.String())
+	}
+	if mock.WriteAttempts() != 0 {
+		t.Fatal("a dashboard read sent a settings write")
 	}
 }

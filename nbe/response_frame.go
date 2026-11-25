@@ -39,6 +39,10 @@ func (frame *NBEResponse) Pack(writer io.Writer) error {
 		return fmt.Errorf("invalid response header")
 	}
 	payloadStr := serializePayload(frame.Payload)
+	if payloadStr == "" {
+		// Functions 7, 8 and 10 to 12 reply with records, not key=value pairs.
+		payloadStr = frame.RawPayload
+	}
 	if len(payloadStr) > 999 {
 		return fmt.Errorf("response payload exceeds the NBE frame limit")
 	}
