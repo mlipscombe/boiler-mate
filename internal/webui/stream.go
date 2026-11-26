@@ -7,19 +7,23 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"reflect"
 	"strconv"
 	"time"
+
+	"github.com/mlipscombe/boiler-mate/internal/heating"
 )
 
 type dashboardStatus struct {
-	Serial          string                 `json:"serial"`
-	Data            map[string]snapshot    `json:"data"`
-	HASignals       map[string]sensorLabel `json:"haSignals,omitempty"`
-	Online          bool                   `json:"online"`
-	Control         bool                   `json:"control"`
-	Fahrenheit      bool                   `json:"fahrenheit"`
-	HistoryRevision uint64                 `json:"historyRevision"`
-	EventRevision   uint64                 `json:"eventRevision"`
+	Serial          string                   `json:"serial"`
+	Data            map[string]snapshot      `json:"data"`
+	HASignals       map[string]sensorLabel   `json:"haSignals,omitempty"`
+	Heating         *heating.DashboardInputs `json:"heating,omitempty"`
+	Online          bool                     `json:"online"`
+	Control         bool                     `json:"control"`
+	Fahrenheit      bool                     `json:"fahrenheit"`
+	HistoryRevision uint64                   `json:"historyRevision"`
+	EventRevision   uint64                   `json:"eventRevision"`
 }
 
 // signalChange wakes the streams without holding a queue of past readings. The caller holds ui.mu.
@@ -44,8 +48,21 @@ func (ui *UI) eventChanges() <-chan struct{} {
 }
 
 func (ui *UI) statusSnapshot(telemetryOnly bool) (dashboardStatus, <-chan struct{}) {
+	now := time.Now()
+	var inputs *heating.DashboardInputs
+	if ui.heating != nil {
+		inputs = ui.heating.DashboardInputs(now)
+	}
 	ui.mu.RLock()
 	defer ui.mu.RUnlock()
+	if inputs != nil && inputs.OutdoorTemperature == nil {
+		if temp, ok := controllerOutdoorReading(now, ui.outdoorWeatherFahrenheit, ui.snapshots["advanced_data"], ui.snapshots["operating_data"]); ok {
+			if inputs.Unit == "F" {
+				temp = temp*9/5 + 32
+			}
+			inputs.OutdoorTemperature, inputs.OutdoorSource = &temp, weatherRemote
+		}
+	}
 	var data map[string]snapshot
 	if telemetryOnly {
 		data = make(map[string]snapshot, 3)
@@ -76,8 +93,9 @@ func (ui *UI) statusSnapshot(telemetryOnly bool) (dashboardStatus, <-chan struct
 	}
 	latest := data["operating_data"].At
 	return dashboardStatus{
-		Serial: ui.serial, Data: data, Online: !latest.IsZero() && time.Since(latest) < 20*time.Second,
+		Serial: ui.serial, Data: data, Online: !latest.IsZero() && now.Sub(latest) < 20*time.Second,
 		HASignals: maps.Clone(ui.haSignals),
+		Heating:   inputs,
 		Control:   ui.write != nil, Fahrenheit: ui.fahrenheit, HistoryRevision: ui.historyRev, EventRevision: ui.eventRev,
 	}, ui.changed
 }
@@ -88,13 +106,14 @@ func (ui *UI) streamStatus(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	var previous <-chan struct{}
+	var previousHeating *heating.DashboardInputs
 	var wasOnline bool
 	for r.Context().Err() == nil {
 		status, changed := ui.statusSnapshot(true)
 		var data any
-		if previous != changed || wasOnline != status.Online {
+		if previous != changed || wasOnline != status.Online || !reflect.DeepEqual(previousHeating, status.Heating) {
 			data = status
-			previous, wasOnline = changed, status.Online
+			previous, wasOnline, previousHeating = changed, status.Online, status.Heating
 		}
 		if writeStreamFrame(w, response, "", data) != nil {
 			return

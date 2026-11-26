@@ -45,7 +45,13 @@ func (ui *UI) recordWeather(ctx context.Context, now time.Time) {
 	ui.mu.RLock()
 	advanced, operating := ui.snapshots["advanced_data"], ui.snapshots["operating_data"]
 	ui.mu.RUnlock()
-	for _, reading := range []snapshot{advanced, operating} {
+	if celsius, ok := controllerOutdoorReading(now, ui.outdoorWeatherFahrenheit, advanced, operating); ok {
+		ui.saveWeather(ctx, now, celsius, weatherRemote)
+	}
+}
+
+func controllerOutdoorReading(now time.Time, fahrenheit bool, readings ...snapshot) (float64, bool) {
+	for _, reading := range readings {
 		if !freshObservation(reading, now, 25*time.Second) {
 			continue
 		}
@@ -54,14 +60,14 @@ func (ui *UI) recordWeather(ctx context.Context, now time.Time) {
 			continue
 		}
 		celsius := raw
-		if ui.outdoorWeatherFahrenheit {
+		if fahrenheit {
 			celsius = fahrenheitToCelsius(raw)
 		}
 		if celsius >= -75 && celsius <= 65 {
-			ui.saveWeather(ctx, now, celsius, weatherRemote)
-			return
+			return celsius, true
 		}
 	}
+	return 0, false
 }
 
 func (ui *UI) saveWeather(ctx context.Context, now time.Time, celsius float64, source string) {

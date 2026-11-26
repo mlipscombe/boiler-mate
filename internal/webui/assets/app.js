@@ -106,6 +106,7 @@ let pushSubscription = null;
 let noticeFilter = saved('noticeFilter', ['alarm','info','connection','fuel']);
 let chosenSignals = saved('signals',['operating_data.boiler_temp','operating_data.boiler_ref']);
 const defaultOverviewReadings = ['operating_data.external_temp','operating_data.air_flow'];
+const outdoorReadings = new Set(['external_temp','outdoor_temp']);
 let chosenMetrics = saved('metrics',defaultOverviewReadings)
   .filter(key=>!combustionReadings.has(readingName(key)));
 
@@ -344,14 +345,60 @@ function updateOverview() {
       dom('a',{class:'system-reading',href:link},dom('span',{},label),dom('strong',{},value),dom('small',{},detail))))));
   const combustion = document.getElementById('overview-combustion');
   if (combustion) renderCombustion(combustion);
+  renderOverviewHeating(document.getElementById('overview-heating'),status.heating);
   const custom = document.getElementById('overview-custom');
-  if (custom) custom.replaceChildren(...chosenMetrics.map(key=>{
+  if (custom) custom.replaceChildren(...overviewMetrics().map(key=>{
     const value=signal(key);
     return dom('div',{class:'compact-reading'},dom('span',{},titleSignal(key)),
       dom('strong',{},withUnit(value,unitSignal(key))));
   }));
   if (focusedAction) live.querySelector('[data-action="'+focusedAction+'"]')?.focus({preventScroll:true});
   updateOverviewPhase();
+}
+
+function overviewMetrics() {
+  return status.heating?.hasLocalOutdoorSensor
+    ? chosenMetrics.filter(key=>!outdoorReadings.has(readingName(key)))
+    : chosenMetrics;
+}
+
+function renderOverviewHeating(target,heating) {
+  if (!target) return;
+  target.hidden=!heating;
+  if (!heating) return;
+  const key=JSON.stringify(heating);
+  if (target.dataset.readings===key) return;
+  target.dataset.readings=key;
+  const {thermostats,unit,outdoorTemperature,outdoorSource,hasLocalOutdoorSensor}=heating;
+  const calling=thermostats.filter(zone=>zone.action==='heating').length;
+  const reporting=thermostats.filter(zone=>zone.action).length;
+  const summary=reporting ? calling+' of '+thermostats.length+' calling for heat' : 'Waiting for thermostat states';
+  const source=outdoorSource==='local' ? 'Local sensor' :
+    outdoorSource==='remote' ? (hasLocalOutdoorSensor?'Controller weather fallback':'Controller weather') : 'Waiting for a reading';
+  const reading=value=>dom('strong',{class:'zone-temperature'},
+    value==null ? '—' : decimalTenths.format(value),
+    value!=null&&dom('small',{},'°'+unit));
+  const actions={heating:'Calling for heat',idle:'Idle',off:'Off',cooling:'Cooling',
+    fan:'Fan only',drying:'Drying',preheating:'Preheating',defrosting:'Defrosting'};
+  const zones=thermostats.map(zone=>{
+    const active=zone.action==='heating';
+    const action=zone.availability==='offline'?'Offline':actions[zone.action]??'Waiting for state';
+    return dom('li',{class:'overview-zone','data-calling':active?'true':null},
+      dom('h3',{},zone.name), reading(zone.temperature),
+      dom('span',{class:'overview-zone-action'},dom('span',{class:'indicator','aria-hidden':'true'}),action));
+  });
+  const link=dom('a',{class:'home-link',href:'#external-heating'},'Manage heating');
+  const restoreFocus=target.contains(document.activeElement);
+  target.replaceChildren(
+    dom('header',{class:'overview-zones-header'},
+      dom('div',{},dom('h2',{},thermostats.length?'Heating zones':'Outdoor conditions'),
+        thermostats.length>0&&dom('p',{class:'muted'},summary)),
+      dom('div',{class:'overview-weather'},
+        dom('div',{},dom('span',{},'Outdoor temperature'),dom('small',{},source)),
+        reading(outdoorTemperature))),
+    ...(zones.length?[dom('ul',{class:'overview-zones-grid'},zones)]:[]),
+    link);
+  if (restoreFocus) link.focus({preventScroll:true});
 }
 
 const boilerSubstates = [null, 'Ventilating', 'Feeding pellets', 'Ignition pulse', 'Ignition',
@@ -417,13 +464,14 @@ function renderCombustion(target) {
 }
 function overview(token) {
   const live = dom('div',{id:'overview-live'});
+  const heating = dom('section',{id:'overview-heating',class:'card overview-zones',hidden:true});
   const chartBody = dom('div',{},empty('Loading performance history…'));
   const recent = dom('div',{},empty('Loading recent events…'));
   const metricsPanel = dom('div',{},empty('Waiting for telemetry…'));
   const customise = dom('details',{},dom('summary',{},'Choose overview readings'),metricsPanel,
     btn('Reset to default',()=>setMetrics(null),'secondary mt-2'));
   main.replaceChildren(heading('Pellet boiler'),
-    dom('div',{class:'stack'},live,
+    dom('div',{class:'stack'},live,heating,
       card('Combustion',null,dom('div',{class:'combustion-grid',id:'overview-combustion'})),
       dom('div',{class:'grid split'},
         card('Performance','Last 24 hours',chartBody,dom('a',{class:'home-link',href:'#charts'},'All charts')),
@@ -437,7 +485,11 @@ function overview(token) {
     updateOverview();
     renderChooser();
   };
-  const renderChooser = ()=>chooseSignals(metricsPanel,chosenMetrics,setMetrics,{exclude:combustionReadings});
+  const renderChooser = ()=>{
+    const exclude=status.heating?.hasLocalOutdoorSensor
+      ? new Set([...combustionReadings,...outdoorReadings]) : combustionReadings;
+    chooseSignals(metricsPanel,overviewMetrics(),setMetrics,{exclude});
+  };
   customise.addEventListener('toggle',()=>{if(customise.open)renderChooser();});
   const performanceNames = {
     'operating_data.boiler_temp':'Boiler temperature',

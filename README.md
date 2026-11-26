@@ -73,6 +73,8 @@ The page also discovers thermostats directly from a Z-Wave JS UI gateway using n
 
 Room and outdoor readings are shown in the page's selected unit. For thermostats that omit the unit from their MQTT data, set `BOILER_MATE_MQTT_THERMOSTAT_UNIT` to `C` (default) or `F` to match the readings they publish. New installations also use that unit as the initial display preference.
 
+**Overview** shows the temperature and current action for each configured thermostat. It uses the configured outdoor sensor when its reading is current and labels fresh controller weather as a fallback if the sensor is unavailable.
+
 ### Home Assistant inputs
 
 Use direct MQTT discovery for devices that already publish usable MQTT readings, including Z-Wave JS UI thermostats. For other devices, such as an ESPHome circulator, configure the optional Home Assistant connection with these environment variables.
