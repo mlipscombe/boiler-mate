@@ -673,7 +673,7 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes={
         const state=period ? (period.calling?demandStates.calling:demandStates.idle) : demandStates.unknown;
         readings.push(dom('div',{class:'chart-tooltip-row'},dom('span',{},'Thermostat'),dom('strong',{},state.label)));
       }
-      tooltip.replaceChildren(dom('div',{class:'chart-tooltip-time'},stamp),readings);
+      tooltip.replaceChildren(dom('div',{class:'chart-tooltip-time'},stamp),...readings);
       visual.dataset.cursorTime=time;
     }
     cursor.hidden=tooltip.hidden=false;
