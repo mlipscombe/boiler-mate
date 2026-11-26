@@ -56,7 +56,7 @@ func Load(args []string, output io.Writer) (Config, error) {
 	controller := flags.String("controller", "", "controller URI, udp://[serial[:password]@]host:port")
 	mqtt := flags.String("mqtt", "", "broker URI, mqtt[s]://[user:password@]host[:port][/prefix]")
 	flags.BoolVar(&cfg.HADiscovery, "homeassistant", lookupEnvOrBool("BOILER_MATE_HOMEASSISTANT", true), "enable Home Assistant discovery")
-	flags.StringVar(&cfg.WebBind, "web-bind", lookupEnvOrString("BOILER_MATE_WEB_BIND", "false"), "web interface listen address, or false")
+	flags.StringVar(&cfg.WebBind, "web-bind", lookupEnvOrString("BOILER_MATE_WEB_BIND", "127.0.0.1:8080"), "web interface listen address, or false")
 	flags.StringVar(&cfg.WebData, "web-data", lookupEnvOrString("BOILER_MATE_WEB_DATA", "boiler-mate-data"), "web interface data directory")
 	flags.BoolVar(&cfg.OutdoorWeatherFahrenheit, "outdoor-weather-fahrenheit",
 		lookupEnvOrBool("BOILER_MATE_OUTDOOR_WEATHER_FAHRENHEIT", false), "convert Fahrenheit outdoor weather readings for the dashboard")

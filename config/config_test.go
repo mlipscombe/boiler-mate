@@ -19,6 +19,7 @@ package config
 
 import (
 	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -30,12 +31,35 @@ func TestLoadDefaultsAndOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Controller.Host != "boiler.local:8483" || cfg.MQTT.Host != "another.local" || cfg.HADiscovery || cfg.Bind != "false" || cfg.WebBind != "false" {
+	if cfg.Controller.Host != "boiler.local:8483" || cfg.MQTT.Host != "another.local" || cfg.HADiscovery || cfg.Bind != "false" {
 		t.Fatal("flags and environment were not applied in the expected order")
 	}
 	cfg, err = Load(nil, io.Discard)
 	if err != nil || cfg.MQTT.Host != "broker.local" || !cfg.HADiscovery {
 		t.Fatalf("expected environment overrides, got %v", err)
+	}
+}
+
+func TestWebBindDefaultsAndOverrides(t *testing.T) {
+	const key = "BOILER_MATE_WEB_BIND"
+	t.Setenv(key, "")
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(nil, io.Discard)
+	if err != nil || cfg.WebBind != "127.0.0.1:8080" {
+		t.Fatalf("default dashboard bind = %q (%v)", cfg.WebBind, err)
+	}
+
+	t.Setenv(key, "0.0.0.0:8081")
+	cfg, err = Load(nil, io.Discard)
+	if err != nil || cfg.WebBind != "0.0.0.0:8081" {
+		t.Fatalf("dashboard bind from environment = %q (%v)", cfg.WebBind, err)
+	}
+
+	cfg, err = Load([]string{"--web-bind=false"}, io.Discard)
+	if err != nil || cfg.WebBind != "false" {
+		t.Fatalf("dashboard bind from flag = %q (%v)", cfg.WebBind, err)
 	}
 }
 

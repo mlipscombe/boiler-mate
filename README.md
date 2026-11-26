@@ -1,6 +1,12 @@
 # Boiler Mate
 
-Boiler Mate connects to a wood-pellet boiler with an NBE controller over the local network. It publishes controller readings to MQTT, supports Home Assistant discovery, and can serve a standalone dashboard for one boiler. The bridge and dashboard work without a StokerCloud account.
+Boiler Mate connects to a wood-pellet boiler with an NBE controller over the local network. It publishes controller readings to MQTT and supports Home Assistant discovery. The bridge and dashboard work without a StokerCloud account.
+
+## Upgrading to 1.0.0
+
+Boiler Mate now starts a [web server and dashboard](#web-dashboard) for one boiler. It listens on port `8080` by default. For an MQTT-only deployment, set `BOILER_MATE_WEB_BIND=false` to disable the dashboard and keep MQTT and Home Assistant monitoring.
+
+Boiler commands now require an explicit opt-in. If you already control your boiler through MQTT or Home Assistant, follow [Enable boiler control](#enable-boiler-control) when upgrading, even if your existing controller URL already includes a PIN.
 
 ## Supported controllers
 
@@ -19,7 +25,7 @@ go build -o boiler-mate ./cmd/boiler-mate
   --mqtt 'mqtt://broker.local:1883'
 ```
 
-Set controller and broker URLs through environment variables to keep passwords out of the command line. Reads work with the serial alone. Set `BOILER_MATE_ENABLE_WRITES=true` and configure a controller PIN to enable dashboard and MQTT commands. The historical `tcp://` controller URI spelling is accepted and uses UDP.
+Set controller and broker URLs through environment variables to keep passwords out of the command line. Reads work with the serial alone. The historical `tcp://` controller URI spelling is accepted and uses UDP.
 
 | Flag | Environment variable | Default |
 | --- | --- | --- |
@@ -28,25 +34,22 @@ Set controller and broker URLs through environment variables to keep passwords o
 | `--bind` | `BOILER_MATE_BIND` | `0.0.0.0:2112` |
 | `--homeassistant` | `BOILER_MATE_HOMEASSISTANT` | `true` |
 | `--log-level` | `BOILER_MATE_LOG_LEVEL` | `info` |
-| `--web-bind` | `BOILER_MATE_WEB_BIND` | `false` |
-| `--web-data` | `BOILER_MATE_WEB_DATA` | `boiler-mate-data` locally and `/data` in Docker |
+| `--web-bind` | `BOILER_MATE_WEB_BIND` | `127.0.0.1:8080` for the binary and `0.0.0.0:8080` in Docker |
+| `--web-data` | `BOILER_MATE_WEB_DATA` | `boiler-mate-data` for the binary and `/data` in Docker |
+| — | `BOILER_MATE_ENABLE_WRITES` | `false` |
 | `--outdoor-weather-fahrenheit` | `BOILER_MATE_OUTDOOR_WEATHER_FAHRENHEIT` | `false` |
 
 The MQTT prefix defaults to `nbe/<serial>`. Add a path to the broker URL to use a custom prefix. MQTT TLS uses `mqtts://` on port 8883 by default. Optional query parameters are `tls_ca` or `tls_cacert` for a private CA, and `tls_cert` plus `tls_key` for mutual TLS. The legacy `insecure=true` option explicitly disables certificate verification.
 
 Metrics and process probes are served at `/metrics`, `/healthz`, and `/liveness`. Set `--bind=false` to disable that listener.
 
-## Dashboard
+## Web dashboard
 
-The dashboard test branch publishes `ghcr.io/mlipscombe/boiler-mate:dashboard-test` alongside an immutable commit tag for each build. Use the test image in the boiler’s deployment when evaluating the dashboard.
+When running the binary directly, open `http://127.0.0.1:8080` on the machine running Boiler Mate. To change the dashboard's listen address or port, set `--web-bind` or `BOILER_MATE_WEB_BIND`. The metrics server uses its own listener. The dashboard needs a writable data directory. Set `--web-data` or `BOILER_MATE_WEB_DATA` to use a different directory.
 
-```sh
-./boiler-mate --web-bind 127.0.0.1:8080 --web-data ./boiler-mate-data
-```
+The Docker image listens on port `8080` on all container interfaces. With Docker bridge networking, publish it with `-p 127.0.0.1:8080:8080` for access from the Docker host. With host networking, set `BOILER_MATE_WEB_BIND` explicitly to the host address you want to listen on. Mount a persistent volume at `/data` writable by UID 10001 to keep dashboard history across container replacements.
 
-Open `http://127.0.0.1:8080`. Boiler Mate defaults to read-only, even when the controller URI contains a PIN. Set `BOILER_MATE_ENABLE_WRITES=true` to opt in to dashboard and MQTT writes. The controller still requires its PIN to accept commands.
-
-Boiler Mate delegates access control to its reverse proxy. Protect the entire dashboard, including `/api/`, behind [Authentik forward auth](https://docs.goauthentik.io/add-secure-apps/providers/proxy/forward_auth) or equivalent, and keep the web listener private to that proxy. In a container, mount a persistent volume at `/data` owned by UID 10001 and set `BOILER_MATE_WEB_BIND=0.0.0.0:8080` to enable the listener.
+Boiler Mate serves the dashboard and API over HTTP without a built-in login. Restrict direct access to a trusted local network, for example by binding to the host's LAN address and limiting access with a firewall. For access beyond that network, put the entire dashboard, including `/api/`, behind an HTTPS reverse proxy that requires authentication. Keep the backend listener reachable only by the proxy so all requests pass through authentication. [Authentik forward auth setup](https://docs.goauthentik.io/add-secure-apps/providers/proxy/forward_auth)
 
 The dashboard includes live telemetry, burner controls, controller settings and help, boiler and hot-water schedules, diagnostics, pellet consumption, signal charts with CSV export, and events. Settings and weekly schedules use the controller's reported ranges and clock. Chart history and events are recorded by this instance. The app reads historical pellet consumption directly from compatible controllers.
 
@@ -55,6 +58,17 @@ Set `BOILER_MATE_OUTDOOR_WEATHER_FAHRENHEIT=true` when the online outdoor weathe
 Enable desktop notices under **Events → Desktop Notifications** on each browser that should receive them. On browsers with Web Push, notices can arrive after the dashboard tab closes. The server needs outbound HTTPS to the browser's push service and sends encrypted notice payloads. The web data directory stores the push identity and subscriptions alongside dashboard history.
 
 Open **Consumption → Purchase Ledger** to track pellets on hand and fuel cost. Enter the number bought, weight and price per bag, pallet, or other unit, and the brand if known. Each purchase can use pounds or kilograms. For opening stock, enter the weight currently on hand and leave its price blank if unknown. Cost reports use the oldest available stock first and count usage from the first successful controller counter reading. Configure a low-stock threshold in the ledger and enable **Pellet supply** under desktop notifications to receive the alert on that device.
+
+### Enable boiler control
+
+Boiler Mate disables controller writes by default. To allow commands, add these environment variables to your service or container configuration and replace the example serial, PIN, and address. If your service passes `--controller`, remove that flag so it uses `BOILER_MATE_CONTROLLER`. Restart Boiler Mate to apply the changes.
+
+```dotenv
+BOILER_MATE_ENABLE_WRITES=true
+BOILER_MATE_CONTROLLER=udp://1234:0123456789@192.168.1.100:8483
+```
+
+The setting enables commands from both the dashboard and MQTT, including Home Assistant. Use broker access controls to limit who can publish to `<prefix>/set/#`. The controller PIN authorizes communication with the boiler. Access to the dashboard and to MQTT command topics is controlled separately.
 
 ### External heating
 
