@@ -82,6 +82,7 @@ const labelCapitalization = {dhw:'DHW',o2:'O2',kw:'kW',i:'I',p:'P',rpm:'RPM',id:
 const colors = ['#345ece','#118576','#b25e35','#a65095','#5c7e36','#4685ad','#ab7f2e','#64748b'];
 const days = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
 const datetime = new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle:'short'});
+const demandTime = new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle:'medium'});
 const shorttime = new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'});
 const numeric = new Intl.NumberFormat(undefined,{maximumFractionDigits:2});
 const decimalTenths = new Intl.NumberFormat(undefined,{minimumFractionDigits:1,maximumFractionDigits:1});
@@ -520,17 +521,18 @@ function chooseSignals(target,selected,change,{limit=Infinity,exclude}={}) {
     [...chooser.querySelectorAll('input')].find(input=>input.value===focused)?.focus({preventScroll:true});
   }
 }
-function loadHistory(keys,duration) {
-  const args = new URLSearchParams({from:Math.floor(Date.now()/1000)-duration});
+function loadHistory(keys,duration,now=Math.floor(Date.now()/1000)) {
+  const args = new URLSearchParams({from:now-duration});
   keys.forEach(key=>args.append('series',key));
   return api('history?'+args);
 }
-function charts(token, initialSignals) {
+function charts(token, initialSignals, zone) {
   let chartSignals = initialSignals?.length ? initialSignals : chosenSignals;
-  let duration = 86400;
+  let duration = zone ? 21600 : 86400;
   let request = 0;
   const chartBody = dom('div',{},empty('Loading history…'));
   const signals = dom('div');
+  const demandNotice = dom('p',{class:'muted',hidden:true});
   const range = dom('select',{'aria-label':'Chart period',onchange:()=>{duration=Number(range.value);load();}},
     [[21600,'6 hours'],[86400,'24 hours'],[604800,'7 days'],[2592000,'30 days'],[31536000,'1 year'],[378691200,'12 years']]
       .map(([value,label])=>dom('option',{value,selected:value===duration},label)));
@@ -538,7 +540,7 @@ function charts(token, initialSignals) {
   const csv = btn('Export CSV',()=>downloadCSV(data),'secondary',{disabled:true});
   const load = async(showLoading=true)=>{
     const id = ++request;
-    if (!chartSignals.length) {
+    if (!chartSignals.length && !zone) {
       chartBody.replaceChildren(empty('Choose up to eight signals to chart.'));
       csv.disabled=true; return;
     }
@@ -547,10 +549,17 @@ function charts(token, initialSignals) {
       chartBody.replaceChildren(empty('Loading history…'));
     }
     try {
-      const loaded = await loadHistory(chartSignals,duration);
+      const now=Math.floor(Date.now()/1000);
+      const demandQuery=new URLSearchParams({zone,from:now-Math.min(duration,30*86400)});
+      const [loaded,demand] = await Promise.all([
+        chartSignals.length ? loadHistory(chartSignals,duration,now) : {},
+        zone ? api('external-heating/pumps/demand?'+demandQuery).catch(()=>null) : null,
+      ]);
       if(token!==generation||request!==id)return;
       data=loaded;
-      showChart(chartBody,data,duration);
+      demandNotice.hidden=!zone||demand!==null;
+      demandNotice.textContent=demandNotice.hidden?'':'Thermostat demand history is temporarily unavailable.';
+      showChart(chartBody,data,duration,{demand});
       csv.disabled=!Object.values(data).some(points=>points.length);
     } catch(error) {
       if(request===id&&token===generation&&showLoading)chartBody.replaceChildren(empty(error.message));
@@ -562,7 +571,7 @@ function charts(token, initialSignals) {
   main.replaceChildren(heading('Charts','Compare live signals recorded by Boiler Mate. History starts when this instance is enabled.'),
     controllerTabs('charts','recorded'),card('Signal history','Each signal keeps its own unit.',
       dom('div',{class:'toolbar'},dom('label',{},'Period',range),csv),
-      chartBody,dom('details',{open:true},dom('summary',{},'Select signals'),signals)));
+      chartBody,demandNotice,dom('details',{open:true},dom('summary',{},'Select signals'),signals)));
   let available = JSON.stringify(measurementKeys(chartSignals));
   refreshPageHistory = ()=>{
     const updated = JSON.stringify(measurementKeys(chartSignals));
@@ -586,10 +595,15 @@ function chartBounds(series) {
   const margin = Math.max((maxY-minY)*.07, .1);
   return {minX,maxX:maxX===minX?minX+1:maxX,minY:minY-margin,maxY:maxY+margin};
 }
-function showChart(target,data,duration,{size='',names={},seriesColors={},axes={},maxGap=Infinity,endTime,sampleOrder=false}={}) {
+const demandStates = {
+  calling:{label:'Calling for heat',color:'#11745a'},
+  idle:{label:'No call for heat',color:'#a4b2c4'},
+  unknown:{label:'No confirmed reading',color:'#edf1f6'},
+};
+function showChart(target,data,duration,{size='',names={},seriesColors={},axes={},maxGap=Infinity,endTime,sampleOrder=false,demand=null}={}) {
   const entries = Object.entries(data).filter(([,points])=>points.length);
   chartRenderers.delete(target);
-  if(!entries.length){target.replaceChildren(empty('No readings in this period yet.'));return;}
+  if(!entries.length&&!demand?.length){target.replaceChildren(empty('No readings in this period yet.'));return;}
   const previous=target.querySelector('canvas.chart');
   const focused=previous===document.activeElement;
   const previousTime=previous?.dataset.cursorTime;
@@ -599,8 +613,10 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes={
   const axisUnits=Object.keys(axes).filter(unit=>units.has(unit));
   const mixed=units.size>1&&!axisUnits.length;
   const performance=size==='performance';
+  const chartLabels=entries.map(([key])=>label(key));
+  if (demand) chartLabels.push('Thermostat demand');
   const visual = dom('canvas',{class:size?'chart '+size:'chart',role:'img',tabindex:0,
-    'aria-label':(performance?'Performance, 24 hours. ':'Line chart. ')+entries.map(([key])=>label(key)).join(', ')+'. Use the arrow keys to inspect values.'});
+    'aria-label':(performance?'Performance, 24 hours. ':'Line chart. ')+chartLabels.join(', ')+'. Use the arrow keys to inspect values.'});
   const cursor=dom('div',{class:'chart-cursor',hidden:true,'aria-hidden':'true'});
   const tooltip=dom('div',{class:'chart-tooltip',hidden:true,role:'status'});
   const plot=dom('div',{class:'chart-plot'},visual,cursor,tooltip);
@@ -616,15 +632,28 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes={
       samples.get(time).push({key,value,i});
     }
   });
-  const times=[...samples.keys()].sort((a,b)=>a-b);
+  const times=new Set(samples.keys());
+  for (const period of demand ?? []) {
+    times.add(period.start/1000);
+    times.add(period.end/1000);
+  }
+  const orderedTimes=[...times].sort((a,b)=>a-b);
   const legend = dom('div',{class:'legend'},entries.map(([key,points],i)=>{
     const text=label(key)+(performance?'':' · '+withUnit(points.at(-1).value,unitSignal(key)));
     return dom('span',{},swatch(key,i),text);
   }));
   target.replaceChildren(plot,legend);
+  if (demand) {
+    target.append(dom('div',{class:'legend'},dom('strong',{},'Thermostat demand'),
+      Object.values(demandStates).map(({label,color})=>{
+        const dot=dom('span',{class:'dot','aria-hidden':'true'});
+        dot.style.color=color;
+        return dom('span',{},dot,label);
+      })));
+  }
   if (mixed) target.append(dom('p',{class:'muted'},'Signals with the same unit share a scale.'));
   let view;
-  let index=previousTime ? nearestChartIndex(times,Number(previousTime)) : null;
+  let index=previousTime ? nearestChartIndex(orderedTimes,Number(previousTime)) : null;
   const select=next=>{
     index=next;
     if(next==null){
@@ -633,11 +662,18 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes={
       return;
     }
     if(!view)return;
-    const time=times[next];
+    const time=orderedTimes[next];
     if(visual.dataset.cursorTime!==String(time)){
-      tooltip.replaceChildren(dom('div',{class:'chart-tooltip-time'},sampleOrder?'Sample '+time:datetime.format(new Date(time*1000))),
-        ...samples.get(time).map(({key,value,i})=>dom('div',{class:'chart-tooltip-row'},
-          dom('span',{},swatch(key,i),label(key)),dom('strong',{},withUnit(value,unitSignal(key))))));
+      const stamp=sampleOrder?'Sample '+time:(demand?demandTime:datetime).format(new Date(time*1000));
+      const readings=(samples.get(time)??[]).map(({key,value,i})=>dom('div',{class:'chart-tooltip-row'},
+        dom('span',{},swatch(key,i),label(key)),dom('strong',{},withUnit(value,unitSignal(key)))));
+      if (demand) {
+        const at=Math.round(time*1000);
+        const period=demand.find(({start,end})=>start<=at&&at<end);
+        const state=period ? (period.calling?demandStates.calling:demandStates.idle) : demandStates.unknown;
+        readings.push(dom('div',{class:'chart-tooltip-row'},dom('span',{},'Thermostat'),dom('strong',{},state.label)));
+      }
+      tooltip.replaceChildren(dom('div',{class:'chart-tooltip-time'},stamp),readings);
       visual.dataset.cursorTime=time;
     }
     cursor.hidden=tooltip.hidden=false;
@@ -653,7 +689,7 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes={
     const {x0,x1,bounds}=view;
     const x=event.clientX-visual.getBoundingClientRect().left;
     const fraction=Math.max(0,Math.min(1,(x-x0)/(x1-x0)));
-    const nearest=nearestChartIndex(times,bounds.minX+fraction*(bounds.maxX-bounds.minX));
+    const nearest=nearestChartIndex(orderedTimes,bounds.minX+fraction*(bounds.maxX-bounds.minX));
     if(nearest!==index)select(nearest);
   };
   visual.addEventListener('pointermove',pointAt);
@@ -662,10 +698,10 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes={
   visual.addEventListener('blur',()=>select(null));
   visual.addEventListener('keydown',event=>{
     switch(event.key){
-      case 'ArrowLeft':select(index==null?times.length-1:Math.max(0,index-1));break;
-      case 'ArrowRight':select(index==null?0:Math.min(times.length-1,index+1));break;
+      case 'ArrowLeft':select(index==null?orderedTimes.length-1:Math.max(0,index-1));break;
+      case 'ArrowRight':select(index==null?0:Math.min(orderedTimes.length-1,index+1));break;
       case 'Home':select(0);break;
-      case 'End':select(times.length-1);break;
+      case 'End':select(orderedTimes.length-1);break;
       case 'Escape':select(null);break;
       default:return;
     }
@@ -678,16 +714,19 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes={
     visual.width=Math.round(width*dpr);visual.height=Math.round(height*dpr);
     const ctx=visual.getContext('2d');
     ctx.scale(dpr,dpr);
-    const bounds=chartBounds(entries.map(([,points])=>points));
+    const bounds=entries.length ? chartBounds(entries.map(([,points])=>points)) :
+      {minX:orderedTimes[0],maxX:orderedTimes.at(-1),minY:0,maxY:1};
     if(!sampleOrder){
       const newest=endTime??Math.floor(Date.now()/1000);
       bounds.minX=Math.min(bounds.minX,newest-duration);
       bounds.maxX=Math.max(bounds.maxX,newest);
     }
+    bounds.minX=Math.min(bounds.minX,orderedTimes[0]);
+    bounds.maxX=Math.max(bounds.maxX,orderedTimes.at(-1));
     const step=chartStep((bounds.maxY-bounds.minY)/4);
     bounds.minY=Math.floor(bounds.minY/step)*step;
     bounds.maxY=Math.ceil(bounds.maxY/step)*step;
-    const rows=axisUnits.length?5:mixed?4:Math.min(8,Math.round((bounds.maxY-bounds.minY)/step));
+    const rows=entries.length?(axisUnits.length?5:mixed?4:Math.min(8,Math.round((bounds.maxY-bounds.minY)/step))):0;
     const scales=new Map(axisUnits.map(unit=>{
       if(axes[unit])return [unit,axes[unit]];
       const range=chartBounds(entries.filter(([key])=>unitSignal(key)===unit).map(([,points])=>points));
@@ -700,10 +739,10 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes={
         scales.set(unit,chartBounds(entries.filter(([key])=>unitSignal(key)===unit).map(([,points])=>points)));
       }
     }
-    const x0=axisUnits.length?48:42, x1=width-(axisUnits.length>1?44:16), y0=14, y1=height-29;
+    const x0=axisUnits.length?48:42, x1=width-(axisUnits.length>1?44:16), y0=14, y1=height-(demand?53:29);
     view={x0,x1,bounds};
     ctx.font='11px system-ui';ctx.fillStyle='#556773';
-    for(let i=0;i<=rows;i++){
+    for(let i=0;rows&&i<=rows;i++){
       const y=y1-i*(y1-y0)/rows;
       ctx.strokeStyle='#dce3dd';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x0,y);ctx.lineTo(x1,y);ctx.stroke();
       if(axisUnits.length){
@@ -717,8 +756,8 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes={
     }
     const formatTime = duration<=86400?shorttime:new Intl.DateTimeFormat(undefined,
       duration>=365*86400?{month:'short',year:'numeric'}:{month:'short',day:'numeric'});
-    const ticks=sampleOrder?times.filter((_,i)=>i===0||i===times.length-1||
-      i%Math.max(1,Math.ceil(times.length*90/(x1-x0)))===0):chartTimeTicks(bounds.minX,bounds.maxX,x1-x0);
+    const ticks=sampleOrder?orderedTimes.filter((_,i)=>i===0||i===orderedTimes.length-1||
+      i%Math.max(1,Math.ceil(orderedTimes.length*90/(x1-x0)))===0):chartTimeTicks(bounds.minX,bounds.maxX,x1-x0);
     for(const [i,tick] of ticks.entries()){
       const x=x0+(tick-bounds.minX)*(x1-x0)/(bounds.maxX-bounds.minX);
       if(i>0&&i<ticks.length-1){
@@ -752,6 +791,18 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes={
       ctx.fill();
     }
     ctx.restore();
+    if (demand) {
+      const y=y1+6;
+      const xAt=time=>x0+(time/1000-bounds.minX)*(x1-x0)/(bounds.maxX-bounds.minX);
+      ctx.fillStyle=demandStates.unknown.color;
+      ctx.fillRect(x0,y,x1-x0,12);
+      for (const {start,end,calling} of demand) {
+        const left=Math.max(x0,xAt(start)),right=Math.min(x1,xAt(end));
+        if (left>=right) continue;
+        ctx.fillStyle=(calling?demandStates.calling:demandStates.idle).color;
+        ctx.fillRect(left,y,right-left,12);
+      }
+    }
     select(index);
   };
   requestAnimationFrame(render);
@@ -1376,8 +1427,9 @@ function renderPage() {
   else if (page==='live-data') readingsPage();
   else if (page==='overview') overview(token);
   else if (page==='charts') {
-    const signals = new URLSearchParams(parameters).getAll('series').filter(key=>/^[a-z0-9_.]{1,100}$/.test(key));
-    charts(token,[...new Set(signals)].slice(0,8));
+    const query = new URLSearchParams(parameters);
+    const signals = query.getAll('series').filter(key=>/^[a-z0-9_.]{1,100}$/.test(key));
+    charts(token,[...new Set(signals)].slice(0,8),query.get('zone'));
   }
   else if (page==='consumption') {
     if(section==='ledger')pelletLedgerPage(token);

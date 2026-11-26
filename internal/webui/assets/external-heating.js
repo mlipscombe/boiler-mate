@@ -369,7 +369,7 @@ function zonePumpsPanel(panel,field) {
       (temperature.value===(saved?.temperature ?? '')&&flow.value===(saved?.flow ?? ''));
     view.hidden=!saved;
     if (saved) {
-      const query=new URLSearchParams();
+      const query=new URLSearchParams({zone:saved.zone});
       for (const series of ['operating_data.boiler_temp','operating_data.power_pct',saved.temperature,saved.flow].filter(Boolean)) {
         query.append('series',series);
       }

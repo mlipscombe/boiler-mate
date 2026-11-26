@@ -31,7 +31,7 @@ func (ui *UI) putZonePump(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &pump) {
 		return
 	}
-	if len(pump.Zone) == 0 || len(pump.Zone) > 512 || strings.ContainsRune(pump.Zone, 0) {
+	if !validZone(pump.Zone) {
 		problem(w, http.StatusUnprocessableEntity, "Choose an external heating zone.")
 		return
 	}
@@ -53,11 +53,26 @@ func (ui *UI) putZonePump(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	ui.pumpMu.Lock()
+	defer ui.pumpMu.Unlock()
 	if err := ui.store.saveZonePump(r.Context(), ui.serial, pump); err != nil {
 		ui.serverError(w, "save zone pump assignment", err)
 		return
 	}
+	assigned := pump.Temperature != "" || pump.Flow != ""
+	if assigned != ui.pumpZones[pump.Zone] {
+		if assigned {
+			ui.pumpZones[pump.Zone] = true
+		} else {
+			delete(ui.pumpZones, pump.Zone)
+		}
+		ui.watchPumpDemand()
+	}
 	writeJSON(w, pump)
+}
+
+func validZone(zone string) bool {
+	return zone != "" && len(zone) <= 512 && !strings.ContainsRune(zone, 0)
 }
 
 func (s *store) zonePumps(ctx context.Context, serial string) ([]zonePump, error) {

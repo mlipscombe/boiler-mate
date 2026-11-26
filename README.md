@@ -87,6 +87,8 @@ Boiler Mate reads the listed states every 15 seconds. It uses each climate entit
 
 Under **External heating → Zone pumps**, assign a media-temperature sensor, a flow sensor, or both to the zone's thermostat. **View pump chart** opens the assigned readings alongside boiler temperature and power. Assignments are for monitoring and have no effect on heat-demand control. Boiler Mate records these sensor histories once per minute in °C and m³/h. Chart recording begins when Boiler Mate receives the readings.
 
+The pump chart also shows when the linked thermostat was calling for heat. Boiler Mate keeps up to 30 days of demand history for assigned zones. The track shows an unknown period whenever the thermostat's action cannot be confirmed or demand history has yet to be recorded.
+
 ### Efficiency suggestions
 
 Open **Monitor → Efficiency** to see what Boiler Mate has observed over the last seven days. Select the thermostats you want it to follow under **External heating**. Automatic control can be off while suggestions are collected.

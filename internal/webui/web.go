@@ -51,6 +51,9 @@ type UI struct {
 	outdoorWeatherFahrenheit bool
 	heating                  *heating.Control
 	efficiencySession        int64
+	zoneDemand               demandRecorder
+	pumpMu                   sync.Mutex
+	pumpZones                map[string]bool
 
 	settingsMu   sync.Mutex
 	mu           sync.RWMutex
@@ -91,7 +94,7 @@ func New(ctx context.Context, logger *slog.Logger, boiler controller, serial, da
 			return controllerread.Read(ctx, boiler, kind, q)
 		}
 	}
-	return &UI{
+	ui := &UI{
 		read:       options.ReadController,
 		controller: boiler, write: options.Write, store: store, logger: logger, serial: serial,
 		push:                     push,
@@ -100,10 +103,25 @@ func New(ctx context.Context, logger *slog.Logger, boiler controller, serial, da
 		efficiencySession:        time.Now().UnixNano(),
 		snapshots:                make(map[string]snapshot), lastSample: make(map[string]time.Time),
 		changed: make(chan struct{}), eventChanged: make(chan struct{}), lastState: lastState,
-	}, nil
+		zoneDemand: newDemandRecorder(), pumpZones: make(map[string]bool),
+	}
+	if ui.heating != nil {
+		pumps, err := store.zonePumps(ctx, serial)
+		if err != nil {
+			return nil, errors.Join(fmt.Errorf("load zone pump assignments: %w", err), store.db.Close())
+		}
+		for _, pump := range pumps {
+			ui.pumpZones[pump.Zone] = true
+		}
+		ui.watchPumpDemand()
+	}
+	return ui, nil
 }
 
 func (ui *UI) Close() error {
+	if ui.heating != nil {
+		ui.heating.WatchZoneDemand(nil, nil)
+	}
 	return ui.store.db.Close()
 }
 
@@ -178,6 +196,7 @@ func (ui *UI) Run(ctx context.Context) {
 	workers.Go(func() { ui.runWebPush(ctx) })
 	workers.Go(func() { ui.runEfficiency(ctx) })
 	workers.Go(func() { ui.runPelletCounter(ctx) })
+	workers.Go(func() { ui.runZoneDemand(ctx) })
 	defer workers.Wait()
 
 	ticker := time.NewTicker(15 * time.Second)
@@ -269,6 +288,7 @@ func (ui *UI) Handler() http.Handler {
 	router.HandleFunc("POST /api/external-heating/resume", ui.resumeExternalHeating)
 	router.HandleFunc("GET /api/external-heating/pumps", ui.getZonePumps)
 	router.HandleFunc("PUT /api/external-heating/pumps", ui.putZonePump)
+	router.HandleFunc("GET /api/external-heating/pumps/demand", ui.getZoneDemand)
 	files, err := fs.Sub(assets, "assets")
 	if err != nil {
 		panic(err)

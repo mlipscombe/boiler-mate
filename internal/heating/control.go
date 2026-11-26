@@ -53,6 +53,9 @@ type Control struct {
 	seenThermostat bool
 	idleSince      time.Time
 	mqttEpoch      uint64
+	demandZones    []string
+	demandStates   map[string]bool
+	demandObserver func(time.Time, map[string]bool)
 
 	cutoff                 bool
 	band                   int
@@ -280,6 +283,7 @@ func (c *Control) updateDemand(now time.Time) {
 	} else if c.idleSince.IsZero() {
 		c.idleSince = now
 	}
+	c.reportZoneDemand(now)
 }
 
 func (c *Control) Observe(topic string, data map[string]any) {

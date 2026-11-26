@@ -86,6 +86,14 @@ func openStore(ctx context.Context, dir string) (*store, error) {
 			flow TEXT NOT NULL,
 			PRIMARY KEY(serial, zone)
 		) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS zone_demand (
+			serial TEXT NOT NULL,
+			zone TEXT NOT NULL,
+			start INTEGER NOT NULL,
+			end INTEGER NOT NULL,
+			calling INTEGER NOT NULL,
+			PRIMARY KEY(serial, zone, start)
+		) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS push_keys (
 			id INTEGER PRIMARY KEY CHECK (id = 1),
 			private_key TEXT NOT NULL,
@@ -247,6 +255,9 @@ func (s *store) prune(ctx context.Context, now time.Time) error {
 	}
 	if err == nil {
 		_, err = s.db.ExecContext(ctx, "DELETE FROM weather_observations WHERE time < ?", now.AddDate(-2, 0, 0).Unix())
+	}
+	if err == nil {
+		_, err = s.db.ExecContext(ctx, "DELETE FROM zone_demand WHERE end <= ?", now.Add(-zoneDemandLookback).UnixMilli())
 	}
 	return err
 }
