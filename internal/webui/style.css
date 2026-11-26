@@ -244,7 +244,7 @@
   .signal-chooser label { @apply flex cursor-pointer items-start gap-1.5 text-sm; }
   .signal-chooser input { @apply mt-1 accent-accent; }
 
-  .heating-page { @apply grid gap-4; }
+  .heating-page { @apply grid min-w-0 gap-4; }
   .heating-summary {
     @apply overflow-hidden rounded-xl border border-slate-900 text-white;
     background: linear-gradient(115deg, #182941, #213d64);
@@ -286,22 +286,26 @@
   .heating-panel-head > div { @apply min-w-0 flex-1; }
   .heating-panel-head h2 { @apply text-base font-semibold tracking-tight; }
   .heating-panel-head p, .heating-hint { @apply mt-1 text-sm leading-relaxed text-muted; }
-  .heating-selected { @apply shrink-0 rounded-full bg-accent-soft px-2.5 py-1 text-xs font-semibold text-accent; }
-  .heating-device-list { @apply grid gap-2; }
-  .heating-device {
-    @apply grid min-h-14 cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2.5 rounded-lg border border-border bg-rail px-2.5 py-2 hover:border-blue-200 sm:gap-3 sm:px-3;
+  .heating-zones { @apply grid items-start gap-4 lg:grid-cols-2; }
+  .heating-zone { @apply grid gap-3.5; }
+  .heating-zone-header { @apply flex items-start justify-between gap-3; }
+  .heating-zone-header h2 { @apply wrap-anywhere; }
+  .heating-zone-state { @apply mt-0.5 inline-flex items-center gap-1.5 text-xs leading-tight text-muted; }
+  .heating-zone-state::before { @apply size-1.5 shrink-0 rounded-full bg-slate-400; content: ""; }
+  .heating-zone-state[data-state="heating"] { @apply font-semibold text-alert; }
+  .heating-zone-state[data-state="heating"]::before { @apply bg-amber-600; }
+  .heating-zone-state[data-state="offline"]::before { @apply bg-red-600; }
+  .heating-zone-temp { @apply shrink-0 text-lg font-semibold tracking-tight whitespace-nowrap; }
+  .heating-zone-demand {
+    @apply flex min-h-10 cursor-pointer items-center gap-2.5 rounded-lg border border-border bg-rail px-2.5 py-2 text-sm font-medium;
   }
-  .heating-device:has(input:checked) { @apply border-blue-200 bg-accent-soft; }
-  .heating-device:has(input:disabled) { @apply cursor-default; }
-  .heating-device-check { @apply size-4 shrink-0 cursor-pointer accent-accent disabled:cursor-default; }
-  .heating-device-label { @apply grid min-w-0 gap-0.5; }
-  .heating-device-label strong { @apply text-sm font-semibold leading-tight wrap-anywhere; }
-  .heating-device-state { @apply inline-flex items-center gap-1.5 text-xs leading-tight text-muted; }
-  .heating-device-state::before { @apply size-1.5 shrink-0 rounded-full bg-slate-400; content: ""; }
-  .heating-device-state[data-state="heating"] { @apply font-semibold text-alert; }
-  .heating-device-state[data-state="heating"]::before { @apply bg-amber-600; }
-  .heating-device-state[data-state="offline"]::before { @apply bg-red-600; }
-  .heating-device-temp { @apply text-right text-sm font-semibold whitespace-nowrap sm:text-base; }
+  .heating-zone-demand:has(:checked) { @apply border-blue-200 bg-accent-soft text-accent; }
+  .heating-zone-demand:has(:disabled) { @apply cursor-default; }
+  .heating-zone-check { @apply size-4 shrink-0 cursor-pointer accent-accent disabled:cursor-default; }
+  .heating-zone-pumps { @apply grid grid-cols-[repeat(auto-fit,minmax(min(100%,10.5rem),1fr))] gap-2.5; }
+  .heating-pump-reading { @apply mt-1 block text-xs font-medium text-muted; }
+  .heating-zone-chart { @apply justify-self-start; }
+  .heating-pump-error { @apply flex flex-wrap items-center gap-2; }
   .heating-field { @apply grid min-w-0 gap-1.5; }
   .heating-field label { @apply text-xs font-semibold leading-tight text-muted; }
   .heating-field .field-input, .heating-band .field-input { @apply min-h-10 rounded-lg px-2.5; }

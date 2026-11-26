@@ -72,7 +72,7 @@ The setting enables commands from both the dashboard and MQTT, including Home As
 
 ### External heating
 
-Open **Integration → Zones** to select thermostats and link zone pump readings. Open **Integration → Outdoor Climate** to select an outdoor sensor, set the cutoff, and configure maximum-power bands. After configuring at least one control rule, turn on **Enable external control** on either page and save. Settings are stored in the dashboard data directory and continue to apply across restarts, including if you later turn off the dashboard. Controller writes and a PIN are required for automatic control.
+Open **Integration → Zones** to choose which zones can call for heat and link pump readings on each zone’s card. Open **Integration → Outdoor Climate** to select an outdoor sensor, set the cutoff, and configure maximum-power bands. After configuring at least one control rule, turn on **Enable external control** on either page and save. Settings are stored in the dashboard data directory and continue to apply across restarts, including if you later turn off the dashboard. Controller writes and a PIN are required for automatic control.
 
 The start and stop commands operate the entire boiler, including domestic hot water production.
 
@@ -101,7 +101,7 @@ Use direct MQTT discovery for devices that already publish usable MQTT readings,
 
 Boiler Mate reads the listed states every 15 seconds. It uses each climate entity's reported HVAC action for heat demand and offers temperature sensors as outdoor sources under **Integration → Outdoor Climate**. Keep MQTT devices out of the allowlist to give each physical device one source. The connection issues only read requests. The token inherits its Home Assistant account's permissions. [Home Assistant REST API](https://contributors.home-assistant.io/core/internals/rest-api/)
 
-Under **Integration → Zones → Zone Pumps**, assign a media-temperature sensor, a flow sensor, or both to the zone's thermostat. **View pump chart** opens the assigned readings alongside boiler temperature and power. Assignments are for monitoring and have no effect on heat-demand control. Boiler Mate records these sensor histories once per minute in °C and m³/h. Chart recording begins when Boiler Mate receives the readings.
+On each card under **Integration → Zones**, choose a **Pump temperature** sensor, a **Pump flow** sensor, or both, then select **Save changes**. **View pump chart** opens the assigned readings alongside boiler temperature and power. Assignments are for monitoring and have no effect on heat-demand control. Boiler Mate records these sensor histories once per minute in °C and m³/h. Chart recording begins when Boiler Mate receives the readings.
 
 The pump chart also shows when the linked thermostat was calling for heat. Boiler Mate keeps up to 30 days of demand history for assigned zones. The track shows an unknown period whenever the thermostat's action cannot be confirmed or demand history has yet to be recorded.
 
