@@ -79,6 +79,13 @@ func openStore(ctx context.Context, dir string) (*store, error) {
 			observation BLOB NOT NULL,
 			PRIMARY KEY(serial, time)
 		) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS zone_pumps (
+			serial TEXT NOT NULL,
+			zone TEXT NOT NULL,
+			temperature TEXT NOT NULL,
+			flow TEXT NOT NULL,
+			PRIMARY KEY(serial, zone)
+		) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS push_keys (
 			id INTEGER PRIMARY KEY CHECK (id = 1),
 			private_key TEXT NOT NULL,

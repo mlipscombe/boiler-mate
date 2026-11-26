@@ -26,6 +26,7 @@ function externalHeatingForm(title, data, token) {
   const numericInput = (id, value, attrs={}) => dom('input', {id,type:'number',class:'field-input',value,...attrs});
   const panel = (label, description, action, ...children) => dom('section', {class:'heating-panel'},
     dom('header', {class:'heating-panel-head'}, dom('div', {},dom('h2', {},label), description&&dom('p',{},description)),action),children);
+  const pumps = zonePumpsPanel(panel,field);
 
   const enabled = dom('input', {id:'heating-enabled',type:'checkbox',role:'switch',class:'heating-switch',
     checked:settings.enabled,disabled:!data.writable&&!settings.enabled});
@@ -86,6 +87,7 @@ function externalHeatingForm(title, data, token) {
     const inputs = next.inputs ?? [];
     const discovered = new Map(inputs.map(input=>[input.id,input]));
     const thermostatInputs = inputs.filter(input=>input.kind==='thermostat');
+    pumps.show(thermostatInputs,next.settings.thermostats ?? []);
     const sensors = inputs.filter(input=>input.kind==='temperature');
     const saved = next.settings.thermostats ?? [];
     const reporting = saved.filter(id=>discovered.get(id)?.action);
@@ -291,7 +293,8 @@ function externalHeatingForm(title, data, token) {
           dom('div',{class:'heating-field-pair heating-sensor-fields'},field('Outdoor sensor',sensor),field('Units',unit)),
           dom('div',{class:'heating-field-pair heating-cutoff-fields'},field('Stop at or above',stop),field('Restart differential',delta)),
           cutoffHint),
-        panel('Maximum-power bands','Set the burner limit for each outdoor temperature range.',add,emptyBands,bands))),
+        panel('Maximum-power bands','Set the burner limit for each outdoor temperature range.',add,emptyBands,bands),
+        pumps.element)),
     saveDock);
   form.addEventListener('input',()=>{ syncBands(); updateDraft(); });
   form.addEventListener('invalid',event=>{ if (advanced.contains(event.target)) advanced.open=true; },true);
@@ -312,4 +315,104 @@ function externalHeatingForm(title, data, token) {
     if (form.isConnected) setTimeout(refreshHeating,3000);
   }
   setTimeout(refreshHeating,3000);
+}
+
+function zonePumpsPanel(panel,field) {
+  const select = id=>dom('select',{id,class:'field-input'});
+  const zone = select('pump-zone');
+  const temperature = select('pump-temperature');
+  const flow = select('pump-flow');
+  const live = dom('p',{class:'heating-hint'});
+  const message = dom('p',{class:'heating-error',role:'alert'});
+  const view = dom('a',{class:'secondary',hidden:true},'View pump chart');
+  const save = btn('Save assignment',persist,'secondary',{disabled:true});
+  const controls = dom('div',{class:'grid'},
+    field('Heating zone',zone),
+    dom('div',{class:'heating-field-pair'},field('Media temperature',temperature),field('Flow rate',flow)),
+    live,dom('div',{class:'toolbar'},save,view),message);
+  const element = panel('Zone pumps','Link pump readings to the thermostat for that loop.',null,controls);
+  let assignments;
+  let optionsKey;
+  let inputs = [];
+  let selectedZones = [];
+  let busy = false;
+
+  function options(control, entries, placeholder, selected) {
+    control.replaceChildren(dom('option',{value:''},placeholder),
+      ...entries.map(([value,label])=>dom('option',{value,selected:value===selected},label)));
+    control.value = selected;
+  }
+
+  function refresh(reset=false, preferredZone=zone.value) {
+    const signals = Object.entries(status.haSignals ?? {}).sort(([,a],[,b])=>a.name.localeCompare(b.name));
+    const zones = new Map(inputs.map(input=>[input.id,input.name]));
+    for (const id of [...selectedZones,...(assignments?.keys() ?? [])]) {
+      if (!zones.has(id)) zones.set(id,id);
+    }
+    const currentZone = zones.has(preferredZone) ? preferredZone : '';
+    const saved = assignments?.get(currentZone);
+    reset = reset || currentZone!==zone.value;
+    const key = JSON.stringify([Array.from(zones),signals]);
+    if (reset || key!==optionsKey) {
+      optionsKey=key;
+      options(zone,Array.from(zones),'Choose a zone',currentZone);
+      for (const [control,unit,previous] of [[temperature,'°C',saved?.temperature],[flow,'m³/h',saved?.flow]]) {
+        const entries = signals.filter(([,label])=>label.unit===unit).map(([id,label])=>[id,label.name]);
+        const value = (reset?previous:control.value) ?? '';
+        if (value&&!entries.some(([id])=>id===value)) entries.push([value,titleSignal(value)]);
+        options(control,entries,'None',value);
+      }
+    }
+    zone.disabled=busy||!assignments||!zones.size;
+    flow.disabled=temperature.disabled=busy||!assignments||!zone.value;
+    save.disabled=busy||!assignments||!zone.value||
+      (temperature.value===(saved?.temperature ?? '')&&flow.value===(saved?.flow ?? ''));
+    view.hidden=!saved;
+    if (saved) {
+      const query=new URLSearchParams();
+      for (const series of ['operating_data.boiler_temp','operating_data.power_pct',saved.temperature,saved.flow].filter(Boolean)) {
+        query.append('series',series);
+      }
+      view.href='#charts/recorded?'+query;
+    }
+    const thermostat=inputs.find(input=>input.id===zone.value);
+    const action=thermostat?.action;
+    const parts=[action?('Thermostat · '+action):null];
+    for (const id of [saved?.temperature,saved?.flow].filter(Boolean)) {
+      const value=signal(id);
+      parts.push(titleSignal(id)+' · '+(value==null?'Waiting for reading':withUnit(value,unitSignal(id))));
+    }
+    const text=parts.filter(Boolean).join(' · ') || (!signals.length?'Waiting for Home Assistant pump sensors.':'');
+    if (live.textContent!==text) live.textContent=text;
+  }
+
+  async function persist() {
+    const pump={zone:zone.value,temperature:temperature.value,flow:flow.value};
+    busy=true;
+    message.textContent='';
+    refresh();
+    try {
+      await api('external-heating/pumps',{method:'PUT',body:JSON.stringify(pump)});
+      if (pump.temperature || pump.flow) assignments.set(pump.zone,pump);
+      else assignments.delete(pump.zone);
+      toast('Pump assignment saved.');
+    } catch (error) {
+      message.textContent=error.message;
+    } finally {
+      busy=false;
+      refresh();
+    }
+  }
+
+  zone.onchange=()=>refresh(true);
+  temperature.onchange=flow.onchange=()=>refresh();
+  api('external-heating/pumps').then(pumps=>{
+    assignments=new Map(pumps.map(pump=>[pump.zone,pump]));
+    refresh(true,zone.value || pumps[0]?.zone || '');
+  }).catch(error=>{message.textContent=error.message;});
+  return {element,show(nextInputs,nextSelectedZones) {
+    inputs=nextInputs;
+    selectedZones=nextSelectedZones;
+    refresh();
+  }};
 }

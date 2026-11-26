@@ -525,7 +525,8 @@ function loadHistory(keys,duration) {
   keys.forEach(key=>args.append('series',key));
   return api('history?'+args);
 }
-function charts(token) {
+function charts(token, initialSignals) {
+  let chartSignals = initialSignals?.length ? initialSignals : chosenSignals;
   let duration = 86400;
   let request = 0;
   const chartBody = dom('div',{},empty('Loading history…'));
@@ -537,7 +538,7 @@ function charts(token) {
   const csv = btn('Export CSV',()=>downloadCSV(data),'secondary',{disabled:true});
   const load = async(showLoading=true)=>{
     const id = ++request;
-    if (!chosenSignals.length) {
+    if (!chartSignals.length) {
       chartBody.replaceChildren(empty('Choose up to eight signals to chart.'));
       csv.disabled=true; return;
     }
@@ -546,7 +547,7 @@ function charts(token) {
       chartBody.replaceChildren(empty('Loading history…'));
     }
     try {
-      const loaded = await loadHistory(chosenSignals,duration);
+      const loaded = await loadHistory(chartSignals,duration);
       if(token!==generation||request!==id)return;
       data=loaded;
       showChart(chartBody,data,duration);
@@ -555,16 +556,16 @@ function charts(token) {
       if(request===id&&token===generation&&showLoading)chartBody.replaceChildren(empty(error.message));
     }
   };
-  const choose = ()=>chooseSignals(signals,chosenSignals,selection=>{
-    chosenSignals=selection; saveLocal('signals',selection); choose(); load();
+  const choose = ()=>chooseSignals(signals,chartSignals,selection=>{
+    chartSignals=chosenSignals=selection; saveLocal('signals',selection); choose(); load();
   },{limit:8});
   main.replaceChildren(heading('Charts','Compare live signals recorded by Boiler Mate. History starts when this instance is enabled.'),
     controllerTabs('charts','recorded'),card('Signal history','Each signal keeps its own unit.',
       dom('div',{class:'toolbar'},dom('label',{},'Period',range),csv),
       chartBody,dom('details',{open:true},dom('summary',{},'Select signals'),signals)));
-  let available = JSON.stringify(measurementKeys(chosenSignals));
+  let available = JSON.stringify(measurementKeys(chartSignals));
   refreshPageHistory = ()=>{
-    const updated = JSON.stringify(measurementKeys(chosenSignals));
+    const updated = JSON.stringify(measurementKeys(chartSignals));
     if (available!==updated) {
       available=updated;
       choose();
@@ -1361,7 +1362,8 @@ function renderPage() {
   refreshPageEvents = null;
   clearInterval(overviewPhaseTimer);
   chartRenderers.clear();
-  const [hashPage,requestedSection]=window.location.hash.slice(1).split('/');
+  const [hashPath,parameters]=window.location.hash.slice(1).split('?');
+  const [hashPage,requestedSection]=hashPath.split('/');
   const requested=({ 'advanced-data':'live-data', messages:'events', notifications:'events' })[hashPage]??hashPage;
   page=navigation.flatMap(([,items])=>items).some(([id])=>id===requested)?requested:'overview';
   const sections=groups[page]?.[2] ?? (page==='consumption'?consumptionSections:[]);
@@ -1373,7 +1375,10 @@ function renderPage() {
   else if (groups[page]) settingsPage(page,section,token);
   else if (page==='live-data') readingsPage();
   else if (page==='overview') overview(token);
-  else if (page==='charts') charts(token);
+  else if (page==='charts') {
+    const signals = new URLSearchParams(parameters).getAll('series').filter(key=>/^[a-z0-9_.]{1,100}$/.test(key));
+    charts(token,[...new Set(signals)].slice(0,8));
+  }
   else if (page==='consumption') {
     if(section==='ledger')pelletLedgerPage(token);
     else consumption(section,token);

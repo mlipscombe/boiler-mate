@@ -267,6 +267,8 @@ func (ui *UI) Handler() http.Handler {
 	router.HandleFunc("GET /api/external-heating", ui.getExternalHeating)
 	router.HandleFunc("PUT /api/external-heating", ui.putExternalHeating)
 	router.HandleFunc("POST /api/external-heating/resume", ui.resumeExternalHeating)
+	router.HandleFunc("GET /api/external-heating/pumps", ui.getZonePumps)
+	router.HandleFunc("PUT /api/external-heating/pumps", ui.putZonePump)
 	files, err := fs.Sub(assets, "assets")
 	if err != nil {
 		panic(err)

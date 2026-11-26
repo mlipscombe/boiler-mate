@@ -85,7 +85,7 @@ Use direct MQTT discovery for devices that already publish usable MQTT readings,
 
 Boiler Mate reads the listed states every 15 seconds. It uses each climate entity's reported HVAC action for heat demand and offers temperature sensors as outdoor sources under **External heating**. Keep MQTT devices out of the allowlist to give each physical device one source. The connection issues only read requests. The token inherits its Home Assistant account's permissions. [Home Assistant REST API](https://contributors.home-assistant.io/core/internals/rest-api/)
 
-Under **Charts**, select the pump's media temperature and flow alongside **Boiler temperature** and **Power** or **Power output**. Boiler Mate records these sensor histories once per minute in °C and m³/h. Chart recording begins when Boiler Mate receives the readings.
+Under **External heating → Zone pumps**, assign a media-temperature sensor, a flow sensor, or both to the zone's thermostat. **View pump chart** opens the assigned readings alongside boiler temperature and power. Assignments are for monitoring and have no effect on heat-demand control. Boiler Mate records these sensor histories once per minute in °C and m³/h. Chart recording begins when Boiler Mate receives the readings.
 
 ### Efficiency suggestions
 
