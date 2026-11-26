@@ -21,3 +21,6 @@ coverage.html
 
 /boiler-mate-data/
 /node_modules/
+
+# Firmware binaries
+/firmware/
