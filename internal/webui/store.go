@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -136,6 +137,8 @@ func number(value any) (float64, bool) {
 		return float64(v), true
 	case nbe.RoundedFloat:
 		return float64(v), true
+	case float64:
+		return v, !math.IsNaN(v) && !math.IsInf(v, 0)
 	default:
 		return 0, false
 	}

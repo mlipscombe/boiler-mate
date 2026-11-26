@@ -58,7 +58,7 @@ Open **Consumption → Purchase ledger** to track pellets on hand and fuel cost.
 
 ### External heating
 
-Open **Controller → External heating** to configure automatic control. Pick one or more MQTT thermostats, an outdoor temperature sensor, or both. Save the settings and enable external heating control. Settings are stored in the dashboard data directory and continue to apply across restarts, including if you later turn off the dashboard. Controller writes and a PIN are required for automatic control.
+Open **Controller → External heating** to configure automatic control. Pick one or more thermostats, an outdoor temperature sensor, or both. Save the settings and enable external heating control. Settings are stored in the dashboard data directory and continue to apply across restarts, including if you later turn off the dashboard. Controller writes and a PIN are required for automatic control.
 
 The start and stop commands operate the entire boiler, including domestic hot water production.
 
@@ -73,13 +73,27 @@ The page also discovers thermostats directly from a Z-Wave JS UI gateway using n
 
 Room and outdoor readings are shown in the page's selected unit. For thermostats that omit the unit from their MQTT data, set `BOILER_MATE_MQTT_THERMOSTAT_UNIT` to `C` (default) or `F` to match the readings they publish. New installations also use that unit as the initial display preference.
 
+### Home Assistant inputs
+
+Use direct MQTT discovery for devices that already publish usable MQTT readings, including Z-Wave JS UI thermostats. For other devices, such as an ESPHome circulator, configure the optional Home Assistant connection with these environment variables.
+
+| Variable | Value |
+| --- | --- |
+| `BOILER_MATE_HA_URL` | Home Assistant base URL, for example `https://homeassistant.example.com` |
+| `BOILER_MATE_HA_TOKEN` | A Home Assistant access token supplied through the deployment's secret store |
+| `BOILER_MATE_HA_ENTITIES` | Comma-separated list of up to 32 `climate.*` or `sensor.*` entities that need Home Assistant, for example `sensor.circulator_media_temperature,sensor.circulator_flow` |
+
+Boiler Mate reads the listed states every 15 seconds. It uses each climate entity's reported HVAC action for heat demand and offers temperature sensors as outdoor sources under **External heating**. Keep MQTT devices out of the allowlist to give each physical device one source. The connection issues only read requests. The token inherits its Home Assistant account's permissions. [Home Assistant REST API](https://contributors.home-assistant.io/core/internals/rest-api/)
+
+Under **Charts**, select the pump's media temperature and flow alongside **Boiler temperature** and **Power** or **Power output**. Boiler Mate records these sensor histories once per minute in °C and m³/h. Chart recording begins when Boiler Mate receives the readings.
+
 ### Efficiency suggestions
 
 Open **Monitor → Efficiency** to see what Boiler Mate has observed over the last seven days. Select the thermostats you want it to follow under **External heating**. Automatic control can be off while suggestions are collected.
 
 Boiler Mate looks for repeated short burns that reach the boiler’s temperature stop while the same loops still call, oscillation during steady firing with usable P and I readings, and repeated runs that stay below target at the controller’s maximum output. Suggestions show the calling loops, measured evidence, and what to check. Startup, hot-water priority, signal gaps, and changes in operating conditions can interrupt an observation. Suggestions are advisory and require no controller writes.
 
-Under **Efficiency → Weather & fuel**, Boiler Mate keeps two years of outdoor observations. It prefers the selected local MQTT sensor when the reading is current and otherwise uses the boiler’s remote weather feed. Reports integrate the degrees below an adjustable heating base over the observed hours. The default is 65 °F. Equivalent heating degree days are degree hours divided by 24. Check the source and coverage columns when comparing periods.
+Under **Efficiency → Weather & fuel**, Boiler Mate keeps two years of outdoor observations. It prefers the selected local sensor when the reading is current and otherwise uses the boiler’s remote weather feed. Reports integrate the degrees below an adjustable heating base over the observed hours. The default is 65 °F. Equivalent heating degree days are degree hours divided by 24. Check the source and coverage columns when comparing periods.
 
 The fuel trend pairs weather with completed periods from the pellet ledger. Boiler Mate reports kilograms per equivalent degree day when weather coverage and the pellet counter support the comparison. Brand comparisons use periods attributed to one brand by the ledger. Pellet use can include domestic hot water, and the ledger estimates which purchase was consumed.
 

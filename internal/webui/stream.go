@@ -12,13 +12,14 @@ import (
 )
 
 type dashboardStatus struct {
-	Serial          string              `json:"serial"`
-	Data            map[string]snapshot `json:"data"`
-	Online          bool                `json:"online"`
-	Control         bool                `json:"control"`
-	Fahrenheit      bool                `json:"fahrenheit"`
-	HistoryRevision uint64              `json:"historyRevision"`
-	EventRevision   uint64              `json:"eventRevision"`
+	Serial          string                 `json:"serial"`
+	Data            map[string]snapshot    `json:"data"`
+	HASignals       map[string]sensorLabel `json:"haSignals,omitempty"`
+	Online          bool                   `json:"online"`
+	Control         bool                   `json:"control"`
+	Fahrenheit      bool                   `json:"fahrenheit"`
+	HistoryRevision uint64                 `json:"historyRevision"`
+	EventRevision   uint64                 `json:"eventRevision"`
 }
 
 // signalChange wakes the streams without holding a queue of past readings. The caller holds ui.mu.
@@ -47,8 +48,8 @@ func (ui *UI) statusSnapshot(telemetryOnly bool) (dashboardStatus, <-chan struct
 	defer ui.mu.RUnlock()
 	var data map[string]snapshot
 	if telemetryOnly {
-		data = make(map[string]snapshot, 2)
-		for _, topic := range []string{"operating_data", "advanced_data"} {
+		data = make(map[string]snapshot, 3)
+		for _, topic := range []string{"operating_data", "advanced_data", homeAssistantGroup} {
 			if readings, ok := ui.snapshots[topic]; ok {
 				data[topic] = readings
 			}
@@ -76,7 +77,8 @@ func (ui *UI) statusSnapshot(telemetryOnly bool) (dashboardStatus, <-chan struct
 	latest := data["operating_data"].At
 	return dashboardStatus{
 		Serial: ui.serial, Data: data, Online: !latest.IsZero() && time.Since(latest) < 20*time.Second,
-		Control: ui.write != nil, Fahrenheit: ui.fahrenheit, HistoryRevision: ui.historyRev, EventRevision: ui.eventRev,
+		HASignals: maps.Clone(ui.haSignals),
+		Control:   ui.write != nil, Fahrenheit: ui.fahrenheit, HistoryRevision: ui.historyRev, EventRevision: ui.eventRev,
 	}, ui.changed
 }
 

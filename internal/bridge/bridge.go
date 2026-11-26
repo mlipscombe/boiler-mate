@@ -15,6 +15,7 @@ import (
 
 	"github.com/mlipscombe/boiler-mate/config"
 	"github.com/mlipscombe/boiler-mate/homeassistant"
+	"github.com/mlipscombe/boiler-mate/internal/hass"
 	"github.com/mlipscombe/boiler-mate/internal/heating"
 	"github.com/mlipscombe/boiler-mate/internal/webui"
 	"github.com/mlipscombe/boiler-mate/monitor"
@@ -145,6 +146,16 @@ func Run(parent context.Context, cfg config.Config, logger *slog.Logger) error {
 			ui.Observe(ctx, topic, values)
 		}
 		workers.Go(func() { ui.Run(ctx) })
+	}
+	if cfg.HomeAssistant.URL != nil && watchHeating {
+		workers.Go(func() {
+			hass.Run(ctx, cfg.HomeAssistant, logger, func(readings []hass.Reading) {
+				external.ObserveHomeAssistant(readings)
+				if ui != nil {
+					ui.ObserveHomeAssistant(ctx, readings)
+				}
+			})
+		})
 	}
 	var ready func()
 	if cfg.HADiscovery {

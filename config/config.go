@@ -28,6 +28,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/mlipscombe/boiler-mate/internal/hass"
 )
 
 type Config struct {
@@ -41,6 +43,7 @@ type Config struct {
 	WebData                  string
 	OutdoorWeatherFahrenheit bool
 	MQTTThermostatUnit       string
+	HomeAssistant            hass.Config
 }
 
 func Load(args []string, output io.Writer) (Config, error) {
@@ -108,7 +111,8 @@ func Load(args []string, output io.Writer) (Config, error) {
 	}
 	cfg.LogLevel = parseLevel(*logLevel)
 	cfg.EnableWrites = lookupEnvOrBool("BOILER_MATE_ENABLE_WRITES", false)
-	return cfg, nil
+	cfg.HomeAssistant, err = homeAssistantConfig()
+	return cfg, err
 }
 
 func parseURL(value, name string, schemes ...string) (*url.URL, error) {

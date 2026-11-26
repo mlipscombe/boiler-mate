@@ -47,6 +47,7 @@ type Control struct {
 	discovery      map[string][]inputSpec
 	zwaveDevices   map[string]inputSpec
 	zwaveGateways  map[string]struct{}
+	homeAssistant  map[string]*input
 	active         map[string]*input
 	missingSince   map[string]time.Time
 	seenThermostat bool
@@ -241,6 +242,9 @@ func (c *Control) updateInputs() {
 	for _, spec := range c.zwaveDevices {
 		activate(c.zwaveInput(spec))
 	}
+	for id, reading := range c.homeAssistant {
+		selected[id] = reading
+	}
 	c.active = selected
 	if c.watch != nil {
 		c.watch(topics)
@@ -355,6 +359,9 @@ func (c *Control) Snapshot() Status {
 	}
 	for _, spec := range c.zwaveDevices {
 		add(c.zwaveInput(spec))
+	}
+	for _, reading := range c.homeAssistant {
+		add(reading.spec)
 	}
 	slices.SortFunc(status.Inputs, func(a, b InputStatus) int {
 		if a.Name == b.Name {

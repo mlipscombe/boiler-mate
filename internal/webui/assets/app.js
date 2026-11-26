@@ -29,7 +29,7 @@ const groups = {
   solar: ['Solar', 'Solar collector, cylinder temperatures, and pump settings.', [['sun','Solar circuit','solar-circuit']]],
   system: ['System', 'Controller information and service settings.', [['misc','Controller','controller'], ['manual','Service','service']]],
 };
-const readingGroups = ['operating_data','advanced_data'];
+const readingGroups = ['operating_data','advanced_data','home_assistant'];
 const readingAliases = {
   o2_corr_low:'corr_low',o2_corr_medium:'corr_medium',o2_corr_high:'corr_high',clouds:'cloud_level',
 };
@@ -150,8 +150,17 @@ function readingName(key) {
   const name = key.split('.').at(-1);
   return Object.hasOwn(readingAliases,name) ? readingAliases[name] : name;
 }
-function titleSignal(key) { return textLabel(readingName(key)); }
-function unitSignal(key) { return labels[readingName(key)]?.[1] ?? ''; }
+function titleSignal(key) {
+  if (key.startsWith('home_assistant.')) return status.haSignals?.[key]?.name ?? textLabel(key.slice(17));
+  return textLabel(readingName(key));
+}
+function unitSignal(key) {
+  const externalUnit = status.haSignals?.[key]?.unit;
+  if (externalUnit) return externalUnit;
+  if (key.startsWith('home_assistant.t_')) return '°C';
+  if (key.startsWith('home_assistant.f_')) return 'm³/h';
+  return labels[readingName(key)]?.[1] ?? '';
+}
 function heading(title,description,actions) {
   return dom('div',{class:'page-heading'},dom('div',{},dom('h1',{},title),description && dom('p',{},description)),actions);
 }
@@ -486,6 +495,7 @@ function liveReadingKeys() {
 }
 function measurementKeys(selected) {
   const keys = new Set(selected);
+  for (const key of Object.keys(status.haSignals ?? {})) keys.add(key);
   const selectedNames = new Set(selected.map(readingName));
   for (const key of liveReadingKeys()) {
     const name = readingName(key);
@@ -504,7 +514,7 @@ function chooseSignals(target,selected,change,{limit=Infinity,exclude}={}) {
       disabled:!checked&&selected.length>=limit,
       onchange:()=>change(checked?selected.filter(k=>k!==key):[...selected,key])}),titleSignal(key));
   }));
-  target.replaceChildren(keys.length ? chooser : empty('Measurements will appear after the first controller reading.'));
+  target.replaceChildren(keys.length ? chooser : empty('Measurements will appear after the first reading.'));
   chooser.scrollTop = scrollTop;
   if (focused) {
     [...chooser.querySelectorAll('input')].find(input=>input.value===focused)?.focus({preventScroll:true});
@@ -552,7 +562,15 @@ function charts(token) {
     controllerTabs('charts','recorded'),card('Signal history','Each signal keeps its own unit.',
       dom('div',{class:'toolbar'},dom('label',{},'Period',range),csv),
       chartBody,dom('details',{open:true},dom('summary',{},'Select signals'),signals)));
-  refreshPageHistory = ()=>load(false);
+  let available = JSON.stringify(measurementKeys(chosenSignals));
+  refreshPageHistory = ()=>{
+    const updated = JSON.stringify(measurementKeys(chosenSignals));
+    if (available!==updated) {
+      available=updated;
+      choose();
+    }
+    load(false);
+  };
   choose(); load();
 }
 
@@ -603,7 +621,7 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes={
     return dom('span',{},swatch(key,i),text);
   }));
   target.replaceChildren(plot,legend);
-  if (mixed) target.append(dom('p',{class:'muted'},'The chart scales each signal independently.'));
+  if (mixed) target.append(dom('p',{class:'muted'},'Signals with the same unit share a scale.'));
   let view;
   let index=previousTime ? nearestChartIndex(times,Number(previousTime)) : null;
   const select=next=>{
@@ -676,6 +694,11 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes={
       const minY=Math.floor(range.minY/axisStep)*axisStep;
       return [unit,{minY,maxY:minY+rows*axisStep}];
     }));
+    if (mixed) {
+      for (const unit of units) {
+        scales.set(unit,chartBounds(entries.filter(([key])=>unitSignal(key)===unit).map(([,points])=>points)));
+      }
+    }
     const x0=axisUnits.length?48:42, x1=width-(axisUnits.length>1?44:16), y0=14, y1=height-29;
     view={x0,x1,bounds};
     ctx.font='11px system-ui';ctx.fillStyle='#556773';
@@ -708,7 +731,7 @@ function showChart(target,data,duration,{size='',names={},seriesColors={},axes={
     ctx.rect(x0,y0,x1-x0,y1-y0);
     ctx.clip();
     for(const [i,[key,points]] of entries.entries()){
-      const own=scales.get(unitSignal(key))??(mixed?chartBounds([points]):bounds);
+      const own=scales.get(unitSignal(key))??bounds;
       ctx.strokeStyle=color(key,i);ctx.fillStyle=color(key,i);ctx.lineWidth=2.2;
       ctx.setLineDash(key.endsWith('_ref')?[5,4]:[]);ctx.beginPath();
       const isolated=[];
@@ -1115,7 +1138,7 @@ function connectDesktopNotices() {
 }
 function dataTable(query) {
   const entries=liveReadingKeys().sort((a,b)=>titleSignal(a).localeCompare(titleSignal(b)));
-  if(!entries.length)return empty('The controller has not returned these readings.');
+  if(!entries.length)return empty('No live readings available.');
   const results=entries.filter(key=>[key,titleSignal(key)].some(label=>label.toLowerCase().includes(query)));
   if(!results.length)return empty('No readings match.');
   return dom('div',{class:'table-scroll'},dom('table',{},

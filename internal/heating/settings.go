@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/mlipscombe/boiler-mate/internal/hass"
 )
 
 type Settings struct {
@@ -72,12 +74,12 @@ func (s Settings) validate() error {
 	seen := make(map[string]bool)
 	for _, id := range s.Thermostats {
 		if !s.validSource(id, "climate") || seen[id] {
-			return errors.New("choose distinct thermostats from MQTT discovery")
+			return errors.New("choose distinct thermostats")
 		}
 		seen[id] = true
 	}
 	if s.OutdoorSensor != "" && !s.validSource(s.OutdoorSensor, "sensor") {
-		return errors.New("choose an outdoor temperature sensor from MQTT discovery")
+		return errors.New("choose an outdoor temperature sensor")
 	}
 	for i, band := range s.Bands {
 		if band.MaxPower < 1 || band.MaxPower > 100 {
@@ -100,6 +102,9 @@ var prefixPattern = regexp.MustCompile(`^[^/+#\x00]+(?:/[^/+#\x00]+)*$`)
 var componentPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 func (s Settings) validSource(id, kind string) bool {
+	if entity, ok := strings.CutPrefix(id, homeAssistantPrefix); ok {
+		return strings.HasPrefix(entity, kind+".") && hass.ValidEntity(entity)
+	}
 	topic, component, split := strings.Cut(id, "#")
 	if len(id) > 512 || strings.ContainsAny(topic, "+\x00") {
 		return false

@@ -8,6 +8,7 @@ import (
 
 type input struct {
 	spec           inputSpec
+	polledStatus   string
 	availability   []string
 	latest         string
 	at             time.Time
@@ -25,6 +26,9 @@ func newInput(spec inputSpec) *input {
 func (in *input) availabilityState() string {
 	if in == nil || in.spec.Problem != "" {
 		return ""
+	}
+	if in.polledStatus != "" {
+		return in.polledStatus
 	}
 	if len(in.availability) == 0 {
 		return "online"

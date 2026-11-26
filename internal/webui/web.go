@@ -55,6 +55,7 @@ type UI struct {
 	settingsMu   sync.Mutex
 	mu           sync.RWMutex
 	snapshots    map[string]snapshot
+	haSignals    map[string]sensorLabel
 	lastSample   map[string]time.Time
 	changed      chan struct{}
 	eventChanged chan struct{}

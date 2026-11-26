@@ -103,12 +103,13 @@ function externalHeatingForm(title, data, token) {
     setText(notices, [next.error,next.powerError].filter(Boolean).join(' '));
     setText(count, selected.size+' selected');
 
-    // MQTT readings update in place so a refresh cannot move keyboard focus.
+    // Readings update in place so a refresh cannot move keyboard focus.
     const key = JSON.stringify(inputs.map(({action,availability,temperature,...device})=>device));
     if (key!==inputsKey) {
       inputsKey = key;
       const missing = Array.from(selected).filter(id=>!discovered.has(id));
       list.replaceChildren(...[...thermostatInputs,...missing.map(id=>({id,name:id,problem:'Waiting for discovery'}))].map(input=>{
+        const source = input.id.startsWith('ha:') ? 'Home Assistant' : 'MQTT';
         const box = dom('input', {type:'checkbox',class:'heating-device-check',checked:selected.has(input.id),
           disabled:Boolean(input.problem&&!selected.has(input.id)),
           'aria-label':input.name,
@@ -118,12 +119,12 @@ function externalHeatingForm(title, data, token) {
             show(data);
             updateDraft();
           }});
-        return dom('label', {class:'heating-device','data-device':input.id,title:input.id},box,
+        return dom('label', {class:'heating-device','data-device':input.id,title:source+' · '+input.id},box,
           dom('span', {class:'heating-device-label'},dom('strong',{},input.name),
             dom('span',{class:'heating-device-state','data-reading':'action'},input.problem)),
           dom('span',{class:'heating-device-temp','data-reading':'temperature','aria-label':'Room temperature'}));
       }));
-      if (!list.children.length) list.append(empty('No MQTT thermostats discovered yet.'));
+      if (!list.children.length) list.append(empty('No thermostats available yet.'));
       sensor.replaceChildren(dom('option', {value:''}, 'No outdoor sensor'),
         ...sensors.map(input=>dom('option',{value:input.id,disabled:Boolean(input.problem&&input.id!==currentSensor)},input.name)),
         currentSensor&&!discovered.has(currentSensor)&&dom('option',{value:currentSensor},currentSensor+' · Waiting for discovery'));
