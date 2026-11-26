@@ -2,19 +2,50 @@ package webui
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/mlipscombe/boiler-mate/internal/heating"
 )
 
-func (ui *UI) getExternalHeating(w http.ResponseWriter, _ *http.Request) {
+type lastOutdoorReading struct {
+	Celsius float64   `json:"celsius"`
+	At      time.Time `json:"at"`
+}
+
+func (ui *UI) writeExternalHeating(w http.ResponseWriter, ctx context.Context) {
+	snapshot := struct {
+		heating.Status
+		LastOutdoorReading *lastOutdoorReading `json:"lastOutdoorReading,omitempty"`
+	}{Status: ui.heating.Snapshot()}
+	if sensor := snapshot.Settings.OutdoorSensor; sensor != "" && snapshot.OutdoorTemperature == nil {
+		var reading lastOutdoorReading
+		var received int64
+		now := time.Now()
+		err := ui.store.db.QueryRowContext(ctx, `
+			SELECT received_ms, celsius FROM outdoor_sensor_readings
+			WHERE serial = ? AND sensor = ? AND received_ms BETWEEN ? AND ?
+		`, ui.serial, sensor, now.Add(-24*time.Hour).UnixMilli(), now.UnixMilli()).Scan(&received, &reading.Celsius)
+		if err == nil {
+			reading.At = time.UnixMilli(received)
+			snapshot.LastOutdoorReading = &reading
+		} else if !errors.Is(err, sql.ErrNoRows) && ctx.Err() == nil {
+			ui.logger.Warn("Could not load the last outdoor sensor reading", "error", err)
+		}
+	}
+	writeJSON(w, snapshot)
+}
+
+func (ui *UI) getExternalHeating(w http.ResponseWriter, r *http.Request) {
 	if ui.heating == nil {
 		problem(w, http.StatusServiceUnavailable, "External heating control is unavailable.")
 		return
 	}
-	writeJSON(w, ui.heating.Snapshot())
+	ui.writeExternalHeating(w, r.Context())
 }
 
 func (ui *UI) putExternalHeating(w http.ResponseWriter, r *http.Request) {
@@ -26,7 +57,7 @@ func (ui *UI) putExternalHeating(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &settings) {
 		return
 	}
-	ui.writeHeatingSettingsResult(w, ui.heating.Set(settings))
+	ui.writeHeatingSettingsResult(w, r.Context(), ui.heating.Set(settings))
 }
 
 func (ui *UI) patchExternalHeating(w http.ResponseWriter, r *http.Request) {
@@ -62,6 +93,13 @@ func (ui *UI) patchExternalHeating(w http.ResponseWriter, r *http.Request) {
 			}
 			fields[name] = value
 		}
+		if _, legacy := patch["enabled"]; legacy {
+			for _, name := range []string{"zoneControl", "outdoorControl"} {
+				if _, explicit := patch[name]; !explicit {
+					delete(fields, name)
+				}
+			}
+		}
 		encoded, err = json.Marshal(fields)
 		if err != nil {
 			return settings, invalid
@@ -77,10 +115,10 @@ func (ui *UI) patchExternalHeating(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusBadRequest, "Invalid heating setting.")
 		return
 	}
-	ui.writeHeatingSettingsResult(w, err)
+	ui.writeHeatingSettingsResult(w, r.Context(), err)
 }
 
-func (ui *UI) writeHeatingSettingsResult(w http.ResponseWriter, err error) {
+func (ui *UI) writeHeatingSettingsResult(w http.ResponseWriter, ctx context.Context, err error) {
 	if err != nil {
 		code := http.StatusUnprocessableEntity
 		switch {
@@ -92,10 +130,10 @@ func (ui *UI) writeHeatingSettingsResult(w http.ResponseWriter, err error) {
 		problem(w, code, err.Error())
 		return
 	}
-	writeJSON(w, ui.heating.Snapshot())
+	ui.writeExternalHeating(w, ctx)
 }
 
-func (ui *UI) resumeExternalHeating(w http.ResponseWriter, _ *http.Request) {
+func (ui *UI) resumeExternalHeating(w http.ResponseWriter, r *http.Request) {
 	if ui.heating == nil {
 		problem(w, http.StatusServiceUnavailable, "External heating control is unavailable.")
 		return
@@ -111,5 +149,5 @@ func (ui *UI) resumeExternalHeating(w http.ResponseWriter, _ *http.Request) {
 		problem(w, code, err.Error())
 		return
 	}
-	writeJSON(w, ui.heating.Snapshot())
+	ui.writeExternalHeating(w, r.Context())
 }

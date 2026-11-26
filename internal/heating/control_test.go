@@ -2,8 +2,10 @@ package heating
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -27,7 +29,7 @@ func newTestControl(t *testing.T, settings Settings) *Control {
 
 func TestThermostatDemandAndDropout(t *testing.T) {
 	s := defaultSettings()
-	s.Enabled = true
+	s.ZoneControl = true
 	s.Thermostats = []string{north, south}
 	c := newTestControl(t, s)
 	c.Receive(north, []byte(`{"act_t":"north/action","avty_t":"north/status"}`), true)
@@ -81,7 +83,7 @@ func TestThermostatDemandAndDropout(t *testing.T) {
 
 func TestDiscoveryRemovalAndBrokerLoss(t *testing.T) {
 	s := defaultSettings()
-	s.Enabled = true
+	s.ZoneControl = true
 	s.Thermostats = []string{north}
 	c := newTestControl(t, s)
 	c.boiler = "ON"
@@ -109,7 +111,7 @@ func TestDiscoveryRemovalAndBrokerLoss(t *testing.T) {
 
 func TestOutdoorOverrideAndPowerBands(t *testing.T) {
 	s := defaultSettings()
-	s.Enabled, s.Unit = true, "F"
+	s.ZoneControl, s.OutdoorControl, s.Unit = true, true, "F"
 	s.Thermostats, s.OutdoorSensor = []string{north}, outdoor+"#outside"
 	s.StopAt, s.RestartDelta = pointer(65.0), 3
 	s.Bands = []Band{{MaxPower: 90}, {From: pointer(50.0), MaxPower: 55}}
@@ -165,7 +167,7 @@ func TestOutdoorOverrideAndPowerBands(t *testing.T) {
 
 func TestOutdoorOnlyResumesItsOwnStopAfterRestart(t *testing.T) {
 	s := defaultSettings()
-	s.Enabled, s.OutdoorSensor, s.StopAt = true, outdoor+"#outside", pointer(20.0)
+	s.OutdoorControl, s.OutdoorSensor, s.StopAt = true, outdoor+"#outside", pointer(20.0)
 	c := newTestControl(t, s)
 	c.write = func(_ context.Context, key string, _ int, current func() bool) error {
 		if key != Stop || !current() {
@@ -191,6 +193,92 @@ func TestOutdoorOnlyResumesItsOwnStopAfterRestart(t *testing.T) {
 	restarted.Observe("operating_data", map[string]any{"state_on": "OFF"})
 	if got := nextAt(restarted, time.Now().Add(3*time.Minute)); got.key != Start {
 		t.Fatalf("outdoor cutoff release after restart = %+v, want start", got)
+	}
+}
+
+func TestZoneAndOutdoorControlAreIndependent(t *testing.T) {
+	s := defaultSettings()
+	s.Thermostats, s.OutdoorSensor, s.StopAt = []string{north}, outdoor+"#outside", pointer(20.0)
+	s.Bands = []Band{{MaxPower: 75}}
+	s.ZoneControl = true
+	c := newTestControl(t, s)
+	c.Receive(north, []byte(`{"action_topic":"north/action"}`), true)
+	c.Receive("north/action", []byte("heating"), false)
+	c.Receive(outdoor, []byte(`{"cmps":{"outside":{"p":"sensor","dev_cla":"temperature","unit_of_meas":"°C","stat_t":"outside"}}}`), true)
+	c.boiler = "OFF"
+	if got := nextAt(c, time.Now()); got.key != Start {
+		t.Fatalf("outdoor sensor without a reading blocked zone-only demand: %+v", got)
+	}
+	c.Receive("outside", []byte("21"), false)
+	if status := c.Snapshot(); status.OutdoorTemperature == nil || status.CutoffActive || status.BandPower != nil {
+		t.Fatalf("zone-only control evaluated outdoor rules: %+v", status)
+	}
+	s.ZoneControl, s.OutdoorControl = false, true
+	s.Bands = nil
+	if err := c.Set(s); err != nil {
+		t.Fatal(err)
+	}
+	c.boiler = "ON"
+	if got := nextAt(c, time.Now()); got.key != Stop || !got.outdoorStop {
+		t.Fatalf("outdoor-only control did not stop a warm boiler: %+v", got)
+	}
+	c.boiler = "OFF"
+	c.Receive("outside", []byte("17"), false)
+	if got := nextAt(c, time.Now()); got.key != "" {
+		t.Fatalf("a monitored thermostat started the boiler: %+v", got)
+	}
+	c.OutdoorResume = true
+	c.Receive("north/action", []byte("idle"), false)
+	if got := nextAt(c, time.Now()); got.key != Start {
+		t.Fatalf("a monitored thermostat blocked outdoor-only resume: %+v", got)
+	}
+}
+
+func TestLegacyControlSettingsMigrateEachConfiguredRule(t *testing.T) {
+	for _, tt := range []struct {
+		name                  string
+		legacy, zone, outdoor bool
+		wantZone, wantOutdoor bool
+	}{
+		{name: "off", zone: true, outdoor: true},
+		{name: "zones", legacy: true, zone: true, wantZone: true},
+		{name: "outdoor", legacy: true, outdoor: true, wantOutdoor: true},
+		{name: "both", legacy: true, zone: true, outdoor: true, wantZone: true, wantOutdoor: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s := defaultSettings()
+			// The selected sensor alone was usable for monitoring with legacy control on.
+			s.OutdoorSensor = outdoor + "#outside"
+			if tt.zone {
+				s.Thermostats = []string{north}
+			}
+			if tt.outdoor {
+				s.StopAt = pointer(20)
+			}
+			legacy := struct {
+				Serial   string `json:"serial"`
+				Settings struct {
+					settingsJSON
+					ZoneControl    bool `json:"zoneControl,omitempty"`
+					OutdoorControl bool `json:"outdoorControl,omitempty"`
+					Enabled        bool `json:"enabled"`
+				} `json:"settings"`
+			}{Serial: "test"}
+			legacy.Settings.settingsJSON, legacy.Settings.Enabled = settingsJSON(s), tt.legacy
+			data, err := json.Marshal(legacy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "external-heating.json"), data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			c := New(dir, "test", slog.Default(), Options{})
+			status := c.Snapshot()
+			if status.Error != "" || status.Settings.ZoneControl != tt.wantZone || status.Settings.OutdoorControl != tt.wantOutdoor || status.Settings.OutdoorSensor != s.OutdoorSensor {
+				t.Fatalf("migrated settings = %+v", status)
+			}
+		})
 	}
 }
 
@@ -241,7 +329,7 @@ func TestZWaveDirectThermostat(t *testing.T) {
 	const operating = node + "/thermostat_operating_state/endpoint_0/state"
 	const gateway = "zwave/_CLIENTS/ZWAVE_GATEWAY-broker/status"
 	s := defaultSettings()
-	s.Enabled, s.Thermostats = true, []string{operating}
+	s.ZoneControl, s.Thermostats = true, []string{operating}
 	c := newTestControl(t, s)
 	c.boiler = "OFF"
 	c.Receive(operating, []byte(`{"value":1}`), true)
@@ -296,7 +384,7 @@ func TestDashboardReadsUnselectedInputs(t *testing.T) {
 	c.Receive("outside", []byte("0"), false)
 
 	status := c.Snapshot()
-	if status.Settings.Enabled || len(status.Settings.Thermostats) != 0 || status.OutdoorTemperature != nil {
+	if status.Settings.ZoneControl || len(status.Settings.Thermostats) != 0 || status.OutdoorTemperature != nil {
 		t.Fatalf("monitoring inputs changed external control settings: %+v", status)
 	}
 	readings := make(map[string]InputStatus)

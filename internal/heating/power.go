@@ -48,7 +48,7 @@ func (c *Control) Resume() error {
 	if c.write == nil {
 		return ErrReadOnly
 	}
-	if !c.Settings.Enabled {
+	if !c.Settings.enabled() {
 		return ErrDisabled
 	}
 	if !c.ManualOff {
@@ -77,7 +77,7 @@ func (c *Control) observePower() {
 		autoStop := !c.AutoStopAt.IsZero() && c.boilerAt.Before(c.AutoStopAt.Add(automaticStopWindow))
 		// Older settings files recorded automatic commands but not the last
 		// observation. An acknowledged stop still accounts for an initial Off.
-		unaccounted := previous == "ON" || (previous == "" && c.Settings.Enabled && c.LastPowerKey != Stop)
+		unaccounted := previous == "ON" || (previous == "" && c.Settings.enabled() && c.LastPowerKey != Stop)
 		if !autoStop && unaccounted {
 			c.setManualStop()
 		}

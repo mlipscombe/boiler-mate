@@ -121,7 +121,7 @@ func New(dataDir, serial string, logger *slog.Logger, options Options) *Control 
 func (c *Control) Enabled() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.Settings.Enabled
+	return c.Settings.enabled()
 }
 
 func (c *Control) Watch(setTopics func([]string)) {
@@ -149,12 +149,14 @@ func (c *Control) UpdateSettings(edit func(Settings) (Settings, error)) error {
 	if err := settings.validate(); err != nil {
 		return err
 	}
-	if settings.Enabled && c.write == nil {
+	if c.write == nil && (settings.ZoneControl && !previous.ZoneControl || settings.OutdoorControl && !previous.OutdoorControl) {
 		return ErrReadOnly
 	}
 	next := c.savedState
 	next.Settings = settings
-	if !sameOutdoor(previous, settings) || settings.StopAt == nil || !settings.Enabled {
+	sourceChanged := !sameOutdoor(previous, settings)
+	outdoorChanged := sourceChanged || previous.Unit != settings.Unit || previous.OutdoorControl != settings.OutdoorControl
+	if sourceChanged || settings.StopAt == nil || !settings.OutdoorControl {
 		next.OutdoorResume = false
 	}
 	if err := save(c.path, next); err != nil {
@@ -165,17 +167,17 @@ func (c *Control) UpdateSettings(edit func(Settings) (Settings, error)) error {
 	if previous.DiscoveryPrefix != settings.DiscoveryPrefix {
 		clear(c.discovery)
 	}
-	if !sameThermostats(previous, settings) || previous.Enabled != settings.Enabled {
+	if !sameThermostats(previous, settings) || previous.ZoneControl != settings.ZoneControl {
 		c.seenThermostat = false
 		c.idleSince = time.Time{}
 		clear(c.missingSince)
 	}
-	if !sameOutdoor(previous, settings) || !reflect.DeepEqual(previous.StopAt, settings.StopAt) || previous.Unit != settings.Unit || previous.Enabled != settings.Enabled {
+	if outdoorChanged || !reflect.DeepEqual(previous.StopAt, settings.StopAt) {
 		c.cutoff = false
 	}
-	c.band = -1
 	c.lastError, c.capError = "", ""
-	if !reflect.DeepEqual(previous.Bands, settings.Bands) || !sameOutdoor(previous, settings) || previous.Unit != settings.Unit {
+	if outdoorChanged || !reflect.DeepEqual(previous.Bands, settings.Bands) {
+		c.band = -1
 		c.capRetry = time.Time{}
 	}
 	c.updateInputs()
@@ -392,7 +394,7 @@ func (c *Control) plan(now time.Time) (command, Status) {
 	if tempKnown {
 		value := s.displayTemperature(celsius)
 		status.OutdoorTemperature = &value
-		if s.StopAt != nil {
+		if s.OutdoorControl && s.StopAt != nil {
 			switch {
 			case value >= *s.StopAt:
 				c.cutoff = true
@@ -400,14 +402,14 @@ func (c *Control) plan(now time.Time) (command, Status) {
 				c.cutoff = false
 			}
 		}
-		if len(s.Bands) > 0 {
+		if s.OutdoorControl && len(s.Bands) > 0 {
 			c.band = powerBand(s, c.band, value)
 			power := s.Bands[c.band].MaxPower
 			status.BandPower = &power
 		}
 	}
-	status.CutoffActive = s.StopAt != nil && c.cutoff
-	if !s.Enabled {
+	status.CutoffActive = s.OutdoorControl && s.StopAt != nil && c.cutoff
+	if !s.enabled() {
 		status.Decision = "External heating control is disabled."
 		return command{}, status
 	}
@@ -416,7 +418,7 @@ func (c *Control) plan(now time.Time) (command, Status) {
 		return command{}, status
 	}
 	if c.ManualOff {
-		status.Decision = "The boiler was stopped manually. Resume automatic control when you want it to follow heat demand again."
+		status.Decision = "The boiler was stopped manually. Resume automatic control to follow the enabled heating rules again."
 		return command{}, status
 	}
 	desired, reason := c.desiredPower(now, status.CutoffActive, tempKnown)
@@ -463,30 +465,29 @@ func (c *Control) desiredPower(now time.Time, cutoff, tempKnown bool) (key, reas
 		return Stop, "Outdoor cutoff is active."
 	}
 	s := c.Settings
+	if !s.ZoneControl {
+		switch {
+		case !tempKnown:
+			return "", "Waiting for an outdoor temperature reading."
+		case s.StopAt != nil && c.OutdoorResume:
+			return Start, "Outdoor cutoff has cleared."
+		case s.StopAt != nil:
+			return "", "Outdoor temperature is below the cutoff."
+		default:
+			return "", "Outdoor temperature is controlling maximum burner power."
+		}
+	}
 	var calling, waiting bool
 	for _, id := range s.Thermostats {
 		calling = calling || c.active[id].currentAction() == "heating"
 		since := c.missingSince[id]
 		waiting = waiting || !since.IsZero() && now.Sub(since) < time.Duration(s.DropoutSeconds)*time.Second
 	}
-	if calling || c.OutdoorResume && len(s.Thermostats) == 0 && s.StopAt != nil {
-		if s.StopAt != nil && !tempKnown {
+	if calling {
+		if s.OutdoorControl && s.StopAt != nil && !tempKnown {
 			return "", "Waiting for the outdoor sensor before starting."
 		}
-		if calling {
-			return Start, "At least one thermostat is calling for heat."
-		}
-		return Start, "Outdoor cutoff has cleared."
-	}
-	if len(s.Thermostats) == 0 {
-		switch {
-		case !tempKnown:
-			return "", "Waiting for an outdoor temperature reading."
-		case s.StopAt != nil:
-			return "", "Outdoor temperature is below the cutoff."
-		default:
-			return "", "Outdoor temperature is controlling maximum burner power."
-		}
+		return Start, "At least one thermostat is calling for heat."
 	}
 	if !c.seenThermostat {
 		return "", "Waiting for the first thermostat action."

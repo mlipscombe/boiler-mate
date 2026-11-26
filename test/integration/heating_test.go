@@ -130,9 +130,9 @@ func TestExternalHeatingWithMosquitto(t *testing.T) {
 			heat = heat || input.ID == thermostat && input.Action == "heating"
 			outside = outside || input.ID == sensor+"#outdoor" && input.Temperature != nil && *input.Temperature == 16
 		}
-		return heat && outside && !state.Settings.Enabled && len(state.Settings.Thermostats) == 0
+		return heat && outside && !state.Settings.ZoneControl && !state.Settings.OutdoorControl && len(state.Settings.Thermostats) == 0
 	})
-	settings.Enabled, settings.Thermostats = true, []string{thermostat}
+	settings.ZoneControl, settings.OutdoorControl, settings.Thermostats = true, true, []string{thermostat}
 	settings.OutdoorSensor = sensor + "#outdoor"
 	cutoff := 20.0
 	settings.StopAt = &cutoff

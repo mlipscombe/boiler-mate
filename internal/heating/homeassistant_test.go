@@ -10,7 +10,7 @@ import (
 func TestHomeAssistantAndMQTTActIndependently(t *testing.T) {
 	const zone = "climate.hallway"
 	s := defaultSettings()
-	s.Enabled = true
+	s.ZoneControl = true
 	s.Thermostats = []string{north, homeAssistantPrefix + zone}
 	c := newTestControl(t, s)
 	c.Receive(north, []byte(`{"act_t":"north/action"}`), true)

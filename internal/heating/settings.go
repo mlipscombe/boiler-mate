@@ -1,6 +1,7 @@
 package heating
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,7 +16,8 @@ import (
 )
 
 type Settings struct {
-	Enabled         bool     `json:"enabled"`
+	ZoneControl     bool     `json:"zoneControl"`
+	OutdoorControl  bool     `json:"outdoorControl"`
 	DiscoveryPrefix string   `json:"discoveryPrefix"`
 	Thermostats     []string `json:"thermostats"`
 	DropoutSeconds  int      `json:"dropoutSeconds"`
@@ -26,6 +28,45 @@ type Settings struct {
 	RestartDelta    float64  `json:"restartDelta"`
 	SensorTimeout   int      `json:"sensorTimeoutSeconds"`
 	Bands           []Band   `json:"bands"`
+}
+
+type settingsJSON Settings
+
+func (s Settings) enabled() bool { return s.ZoneControl || s.OutdoorControl }
+
+func (s Settings) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		settingsJSON
+		Enabled bool `json:"enabled"`
+	}{settingsJSON(s), s.enabled()})
+}
+
+func (s *Settings) UnmarshalJSON(data []byte) error {
+	var decoded struct {
+		settingsJSON
+		Enabled        bool  `json:"enabled"`
+		ZoneControl    *bool `json:"zoneControl"`
+		OutdoorControl *bool `json:"outdoorControl"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	*s = Settings(decoded.settingsJSON)
+	// Existing configurations ran only the rules that had been set up.
+	s.ZoneControl = decoded.Enabled && len(s.Thermostats) > 0
+	s.OutdoorControl = decoded.Enabled && (s.StopAt != nil || len(s.Bands) > 0)
+	if decoded.ZoneControl != nil {
+		s.ZoneControl = *decoded.ZoneControl
+	}
+	if decoded.OutdoorControl != nil {
+		s.OutdoorControl = *decoded.OutdoorControl
+	}
+	if decoded.Enabled && decoded.ZoneControl == nil && decoded.OutdoorControl == nil && !s.enabled() {
+		return errors.New("choose at least one thermostat, an outdoor cutoff, or a maximum-power band")
+	}
+	return nil
 }
 
 type Band struct {
@@ -65,8 +106,11 @@ func (s Settings) validate() error {
 	if (s.StopAt != nil || len(s.Bands) > 0) && s.OutdoorSensor == "" {
 		return errors.New("choose an outdoor sensor to use the cutoff or maximum-power bands")
 	}
-	if s.Enabled && len(s.Thermostats) == 0 && s.StopAt == nil && len(s.Bands) == 0 {
-		return errors.New("choose at least one thermostat, an outdoor cutoff, or a maximum-power band")
+	if s.ZoneControl && len(s.Thermostats) == 0 {
+		return errors.New("choose at least one thermostat to enable zone control")
+	}
+	if s.OutdoorControl && s.StopAt == nil && len(s.Bands) == 0 {
+		return errors.New("set an outdoor cutoff or a maximum-power band to enable outdoor climate control")
 	}
 	if len(s.Thermostats) > 16 || len(s.Bands) > 16 {
 		return errors.New("select at most 16 thermostats and enter at most 16 maximum-power bands")
@@ -164,7 +208,12 @@ func load(path, serial string, defaults Settings) (savedState, error) {
 }
 
 func save(path string, state savedState) error {
-	data, err := json.Marshal(state)
+	// A previous binary cannot represent independent control modes. Keep the
+	// aggregate API field out of the file so a downgrade does not arm both rules.
+	data, err := json.Marshal(struct {
+		savedState
+		Settings settingsJSON `json:"settings"`
+	}{state, settingsJSON(state.Settings)})
 	if err != nil {
 		return err
 	}

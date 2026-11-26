@@ -62,6 +62,55 @@ func TestDegreeWeatherPrefersLocalAndRecordsComparableHours(t *testing.T) {
 	}
 }
 
+func TestOutdoorSensorLastReadingIsOnlyForDisplay(t *testing.T) {
+	dir := t.TempDir()
+	external := heating.New(dir, "TEST", slog.Default(), heating.Options{})
+	const sensor = "homeassistant/sensor/acurite/config"
+	settings := external.Snapshot().Settings
+	settings.OutdoorSensor = sensor
+	if err := external.Set(settings); err != nil {
+		t.Fatal(err)
+	}
+	ui, err := New(t.Context(), slog.Default(), readOnlyFixture{}, "TEST", dir, Options{Heating: external})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ui.Close() })
+	external.Receive(sensor, []byte(`{"dev_cla":"temperature","unit_of_meas":"°C","stat_t":"outside"}`), true)
+	external.Receive("outside", []byte("-1.6"), false)
+	ui.recordWeather(t.Context(), time.Now())
+	read := func() (*float64, *lastOutdoorReading) {
+		t.Helper()
+		response := httptest.NewRecorder()
+		ui.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/external-heating", nil))
+		var status struct {
+			OutdoorTemperature *float64            `json:"outdoorTemperature"`
+			LastOutdoorReading *lastOutdoorReading `json:"lastOutdoorReading"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &status); err != nil || response.Code != http.StatusOK {
+			t.Fatalf("get settings: %d %s (%v)", response.Code, response.Body, err)
+		}
+		return status.OutdoorTemperature, status.LastOutdoorReading
+	}
+	if live, last := read(); live == nil || *live != -1.6 || last != nil {
+		t.Fatalf("live reading not preferred: %v, %+v", live, last)
+	}
+	ui.heating = heating.New(dir, "TEST", slog.Default(), heating.Options{})
+	if live, last := read(); live != nil || last == nil || last.Celsius != -1.6 || last.At.IsZero() {
+		t.Fatalf("last reading unavailable after restart: %v, %+v", live, last)
+	}
+	if _, _, at := ui.heating.OutdoorReading(time.Now()); !at.IsZero() {
+		t.Fatal("cached reading entered the current weather path")
+	}
+	settings.OutdoorSensor = "homeassistant/sensor/another/config"
+	if err := ui.heating.Set(settings); err != nil {
+		t.Fatal(err)
+	}
+	if live, last := read(); live != nil || last != nil {
+		t.Fatalf("used cached data from a different sensor: %v, %+v", live, last)
+	}
+}
+
 func TestDegreeReportSupportsDSTAndMatchesSingleBrand(t *testing.T) {
 	local, err := time.LoadLocation("America/New_York")
 	if err != nil {

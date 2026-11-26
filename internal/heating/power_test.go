@@ -10,7 +10,7 @@ import (
 
 func TestExternalOffHoldsAcrossRestart(t *testing.T) {
 	s := defaultSettings()
-	s.Enabled, s.Thermostats = true, []string{north}
+	s.ZoneControl, s.Thermostats = true, []string{north}
 	c := newTestControl(t, s)
 	c.Observe("operating_data", map[string]any{"state_on": "ON"})
 	c.Observe("operating_data", map[string]any{"state_on": "None"})
@@ -39,7 +39,7 @@ func TestExternalOffHoldsAcrossRestart(t *testing.T) {
 
 func TestAutomaticOffKeepsDemandArmed(t *testing.T) {
 	s := defaultSettings()
-	s.Enabled, s.Thermostats = true, []string{north}
+	s.ZoneControl, s.Thermostats = true, []string{north}
 	c := newTestControl(t, s)
 	discoverHeatingThermostat(c)
 	c.Receive("north/action", []byte("idle"), false)
@@ -68,7 +68,7 @@ func TestAutomaticOffKeepsDemandArmed(t *testing.T) {
 
 func TestManualStopSupersedesAutomaticStartAndOutdoorResume(t *testing.T) {
 	s := defaultSettings()
-	s.Enabled, s.Thermostats = true, []string{north}
+	s.ZoneControl, s.Thermostats = true, []string{north}
 	c := newTestControl(t, s)
 	discoverHeatingThermostat(c)
 	c.boiler = "OFF"

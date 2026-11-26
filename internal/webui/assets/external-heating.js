@@ -41,7 +41,9 @@ function heatingTemperature(value, from, to=from) {
 }
 
 function externalHeatingForm(title, label, zones, data, token) {
-  let savedEnabled = data.settings.enabled;
+  const controlKey = zones ? 'zoneControl' : 'outdoorControl';
+  const controlName = zones ? 'Zone control' : 'Outdoor climate control';
+  let savedEnabled = data.settings[controlKey];
   let saving = false;
   let resuming = false;
   let revision = 0;
@@ -98,7 +100,7 @@ function externalHeatingForm(title, label, zones, data, token) {
     if (temperatures.some(key=>Object.hasOwn(patch,key))) {
       for (const key of temperatures) patch[key]=draft[key];
     }
-    if (enabled.checked!==savedEnabled) patch.enabled=enabled.checked;
+    if (enabled.checked!==savedEnabled) patch[controlKey]=enabled.checked;
     return patch;
   }
 
@@ -116,13 +118,14 @@ function externalHeatingForm(title, label, zones, data, token) {
 
   function show(next) {
     data=next;
-    if (enabled.checked===savedEnabled) enabled.checked=next.settings.enabled;
-    savedEnabled=next.settings.enabled;
+    if (enabled.checked===savedEnabled) enabled.checked=next.settings[controlKey];
+    savedEnabled=next.settings[controlKey];
     readOnly.hidden=next.writable;
     const automatic = savedEnabled&&next.writable;
     const held = automatic&&next.manualOff;
     liveState.dataset.state = held ? 'held' : automatic&&next.cutoffActive ? 'cutoff' : automatic ? 'active' : 'off';
-    setHeatingText(liveState,held ? 'Manual stop' : automatic&&next.cutoffActive ? 'Outdoor cutoff active' : automatic ? 'Control active' : 'Control off');
+    setHeatingText(liveState,held ? controlName+' paused' : automatic ? controlName+' on' :
+      savedEnabled ? controlName+' unavailable' : controlName+' off');
     resume.hidden = !held;
     setHeatingText(report,savedEnabled ? next.decision : '');
     const selected = next.settings.thermostats ?? [];
@@ -131,7 +134,8 @@ function externalHeatingForm(title, label, zones, data, token) {
     setHeatingText(demandReading,selected.length ?
       (reporting.length ? calling+' of '+selected.length+' calling' : 'Waiting for state') : 'No thermostats selected');
     setHeatingText(outdoorReading,next.settings.outdoorSensor ?
-      (next.outdoorTemperature==null ? 'Waiting for reading' : heatingTemperature(next.outdoorTemperature,next.settings.unit)) : 'No sensor selected');
+      (next.outdoorTemperature!=null ? heatingTemperature(next.outdoorTemperature,next.settings.unit) :
+        next.lastOutdoorReading ? heatingTemperature(next.lastOutdoorReading.celsius,'C',next.settings.unit)+' (last seen)' : 'Waiting for reading') : 'No sensor selected');
     setHeatingText(powerReading,next.bandPower==null ? '—' : next.bandPower+'%');
     setHeatingText(notices,[next.error,next.powerError].filter(Boolean).join(' '));
     section.show(next);
@@ -149,8 +153,9 @@ function externalHeatingForm(title, label, zones, data, token) {
     setHeatingText(feedback,'');
     let pumpsSaved=0;
     try {
-      if (heatingChanged && (proposed.enabled ?? savedEnabled) && !await confirmChange('Apply external heating settings?',
-        'Boiler Mate can start or stop the boiler and change its maximum burner power using these settings.', 'Save changes')) return;
+      if (heatingChanged && (proposed[controlKey] ?? savedEnabled) && !await confirmChange('Apply '+controlName.toLowerCase()+' settings?',
+        zones ? 'Boiler Mate can start or stop the boiler based on thermostat demand.' :
+          'Boiler Mate can stop or resume the boiler at the outdoor cutoff and change its maximum burner power.', 'Save changes')) return;
       if (token!==generation) return;
       // A selected thermostat can be used for a pump assignment even while it's undiscovered.
       for (const pump of pumpChanges) {
@@ -172,12 +177,13 @@ function externalHeatingForm(title, label, zones, data, token) {
 
   const fields = dom('fieldset',{class:'heating-page'},section.element);
   const form = dom('form',{class:'heating-page',onsubmit:submit},
-    dom('section',{class:'heating-summary','aria-label':'External heating status'},
+    dom('section',{class:'heating-summary','aria-label':controlName+' status'},
       dom('div',{class:'heating-summary-top'},
         dom('div',{},liveState,report,
-          dom('p',{id:'heating-control-scope',class:'heating-decision'},'Automatic control applies to both Zones and Outdoor Climate.')),
+          dom('p',{id:'heating-control-scope',class:'heating-decision'},zones ?
+            'Uses thermostat demand to start and stop the boiler.' : 'Applies the outdoor cutoff and maximum-power bands.')),
         dom('div',{class:'heating-summary-actions'},resume,
-          dom('label',{for:enabled.id,class:'heating-enable'},'Enable external control',enabled))),
+          dom('label',{for:enabled.id,class:'heating-enable'},'Enable '+controlName.toLowerCase(),enabled))),
       readOnly,dom('dl',{class:'heating-live'},metrics)),
     notices,fields,saveDock);
   form.addEventListener('input',updateDraft);
@@ -389,6 +395,7 @@ function outdoorClimate(data, updateDraft) {
   const stop = heatingNumber('outdoor-stop',settings.stopAt,{step:'any',placeholder:'Off','aria-describedby':'cutoff-hint'});
   const delta = heatingNumber('outdoor-delta',settings.restartDelta,{min:0.01,max:50,step:'any',required:true});
   const sensor = dom('select',{id:'heating-sensor',class:'field-input'});
+  const sensorReading = dom('p',{class:'heating-hint',role:'status'});
   const cutoffHint = dom('p',{id:'cutoff-hint',class:'heating-hint'});
   const bands = dom('div',{class:'heating-bands'});
   const emptyBands = dom('p',{class:'heating-band-empty'},'Using the controller’s maximum burner power.');
@@ -406,16 +413,26 @@ function outdoorClimate(data, updateDraft) {
       inputsKey=key;
       sensor.replaceChildren(dom('option',{value:''},'No outdoor sensor'),
         ...inputs.map(input=>dom('option',{value:input.id,disabled:Boolean(input.problem&&input.id!==currentSensor)},input.name)),
-        currentSensor&&!discovered.has(currentSensor)&&dom('option',{value:currentSensor},currentSensor+' · Waiting for discovery'));
+        currentSensor&&!discovered.has(currentSensor)&&dom('option',{value:currentSensor},currentSensor));
       sensor.value=currentSensor;
     }
     for (const option of sensor.options) {
+      if (!option.value) continue;
       const input = discovered.get(option.value);
-      if (input) {
-        option.disabled=Boolean(input.problem&&input.id!==currentSensor);
-        setHeatingText(option,input.name+(input.temperature!=null?' · '+temperature(input.temperature):'')+(input.problem?' · '+input.problem:''));
+      const savedSensor=option.value===next.settings.outdoorSensor;
+      const value=input?.temperature ?? (savedSensor ? next.outdoorTemperature : null);
+      const last=savedSensor ? next.lastOutdoorReading : null;
+      const current=value==null ? null : temperature(value);
+      const previous=last ? temperature(last.celsius,'C') : null;
+      const missing=input?.problem ?? (input?.availability==='offline' ? 'Offline' : input ? 'Waiting for reading' : 'Waiting for discovery');
+      option.disabled=Boolean(input?.problem&&option.value!==currentSensor);
+      setHeatingText(option,(input?.name ?? option.value)+' · '+(current ?? (previous ? previous+' (last seen)' : missing)));
+      if (option.value===currentSensor) {
+        setHeatingText(sensorReading,current ? 'Current reading '+current : previous ?
+          'Last seen '+previous+' on '+datetime.format(new Date(last.at))+'. '+missing+'.' : missing+'.');
       }
     }
+    sensorReading.hidden=!currentSensor;
   }
 
   function syncBands() {
@@ -488,6 +505,7 @@ function outdoorClimate(data, updateDraft) {
     dom('div',{class:'heating-column'},
       heatingPanel('Outdoor Cutoff','Overrides thermostat demand when it’s warm enough outside.',null,
         dom('div',{class:'heating-field-pair heating-sensor-fields'},heatingField('Outdoor sensor',sensor),heatingField('Units',unit)),
+        sensorReading,
         dom('div',{class:'heating-field-pair heating-cutoff-fields'},heatingField('Stop at or above',stop),heatingField('Restart differential',delta)),
         cutoffHint),
       advanced),

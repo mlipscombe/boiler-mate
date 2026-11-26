@@ -19,7 +19,7 @@ func (c *Control) AdvisoryDemand(now time.Time) AdvisoryDemand {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	demand := AdvisoryDemand{Epoch: c.mqttEpoch}
-	if c.ManualOff || (c.Settings.Enabled && c.Settings.StopAt != nil && c.cutoff) {
+	if c.ManualOff || (c.Settings.OutdoorControl && c.Settings.StopAt != nil && c.cutoff) {
 		return demand
 	}
 	ids := slices.Clone(c.Settings.Thermostats)

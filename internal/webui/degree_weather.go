@@ -20,6 +20,13 @@ const weatherSchema = `
 		fuel_observed INTEGER NOT NULL,
 		PRIMARY KEY(serial, time)
 	) WITHOUT ROWID;
+	CREATE TABLE IF NOT EXISTS outdoor_sensor_readings (
+		serial TEXT NOT NULL,
+		sensor TEXT NOT NULL,
+		received_ms INTEGER NOT NULL,
+		celsius REAL NOT NULL,
+		PRIMARY KEY(serial, sensor)
+	) WITHOUT ROWID;
 `
 
 type weatherPeriod struct {
@@ -37,7 +44,15 @@ type weatherPeriod struct {
 
 func (ui *UI) recordWeather(ctx context.Context, now time.Time) {
 	if ui.heating != nil {
-		if celsius, ok := ui.heating.OutdoorReading(now); ok && celsius >= -75 && celsius <= 65 {
+		if sensor, celsius, at := ui.heating.OutdoorReading(now); !at.IsZero() && celsius >= -75 && celsius <= 65 {
+			_, err := ui.store.db.ExecContext(ctx, `
+				INSERT INTO outdoor_sensor_readings (serial, sensor, received_ms, celsius) VALUES (?, ?, ?, ?)
+				ON CONFLICT (serial, sensor) DO UPDATE SET received_ms = excluded.received_ms, celsius = excluded.celsius
+				WHERE excluded.received_ms > outdoor_sensor_readings.received_ms
+			`, ui.serial, sensor, at.UnixMilli(), celsius)
+			if err != nil && ctx.Err() == nil {
+				ui.logger.Warn("Could not remember the outdoor sensor reading", "error", err)
+			}
 			ui.saveWeather(ctx, now, celsius, weatherLocal)
 			return
 		}
