@@ -1,6 +1,6 @@
 'use strict';
 
-const efficiencySections = [['suggestions','Suggestions'],['weather','Weather & fuel']];
+const efficiencySections = [['suggestions','Suggestions'],['weather','Weather & Fuel']];
 const degreePeriods = [
   ['hour','Hourly', {month:'short',day:'numeric',hour:'numeric',timeZoneName:'short'}, 65*60],
   ['day','Daily', {month:'short',day:'numeric'}, 26*3600],
@@ -49,7 +49,7 @@ function degreeWeatherPage(token) {
       const available=report.periods.findLastIndex(row=>row.coverage>0 || row.usedKg!=null);
       if (available<0) {
         output.replaceChildren(card('Heating degree history',null,
-          empty('Waiting for outdoor readings. Select a local sensor in External heating to use it ahead of boiler weather.')));
+          empty('Waiting for outdoor readings. Select a local sensor in Outdoor Climate to use it ahead of boiler weather.')));
         return;
       }
       const rows=report.periods.slice(0,available+1);
@@ -108,7 +108,7 @@ function degreeWeatherPage(token) {
     dom('label',{},'Interval',period),dom('label',{},'Heating base',base),dom('label',{},'Units',unit),
     btn('Update',null,'secondary',{type:'submit'}));
   main.replaceChildren(
-    heading('Weather & fuel','Compare pellet use across periods with different outdoor heating demand.'),
+    heading('Weather & Fuel','Compare pellet use across periods with different outdoor heating demand.'),
     dom('div',{class:'stack'},renderSections('efficiency',efficiencySections,'weather','Efficiency views'),
       card('Report settings',null,controls),output));
   load();

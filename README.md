@@ -52,13 +52,13 @@ The dashboard includes live telemetry, burner controls, controller settings and 
 
 Set `BOILER_MATE_OUTDOOR_WEATHER_FAHRENHEIT=true` when the online outdoor weather feed reports Fahrenheit values, as some US installations do. Boiler Mate converts the feed's temperature to Celsius for the dashboard and its history.
 
-Enable desktop notices under **Events → Desktop notifications** on each browser that should receive them. On browsers with Web Push, notices can arrive after the dashboard tab closes. The server needs outbound HTTPS to the browser's push service and sends encrypted notice payloads. The web data directory stores the push identity and subscriptions alongside dashboard history.
+Enable desktop notices under **Events → Desktop Notifications** on each browser that should receive them. On browsers with Web Push, notices can arrive after the dashboard tab closes. The server needs outbound HTTPS to the browser's push service and sends encrypted notice payloads. The web data directory stores the push identity and subscriptions alongside dashboard history.
 
-Open **Consumption → Purchase ledger** to track pellets on hand and fuel cost. Enter the number bought, weight and price per bag, pallet, or other unit, and the brand if known. Each purchase can use pounds or kilograms. For opening stock, enter the weight currently on hand and leave its price blank if unknown. Cost reports use the oldest available stock first and count usage from the first successful controller counter reading. Configure a low-stock threshold in the ledger and enable **Pellet supply** under desktop notifications to receive the alert on that device.
+Open **Consumption → Purchase Ledger** to track pellets on hand and fuel cost. Enter the number bought, weight and price per bag, pallet, or other unit, and the brand if known. Each purchase can use pounds or kilograms. For opening stock, enter the weight currently on hand and leave its price blank if unknown. Cost reports use the oldest available stock first and count usage from the first successful controller counter reading. Configure a low-stock threshold in the ledger and enable **Pellet supply** under desktop notifications to receive the alert on that device.
 
 ### External heating
 
-Open **Controller → External heating** to configure automatic control. Pick one or more thermostats, an outdoor temperature sensor, or both. Save the settings and enable external heating control. Settings are stored in the dashboard data directory and continue to apply across restarts, including if you later turn off the dashboard. Controller writes and a PIN are required for automatic control.
+Open **Integration → Zones** to select thermostats and link zone pump readings. Open **Integration → Outdoor Climate** to select an outdoor sensor, set the cutoff, and configure maximum-power bands. After configuring at least one control rule, turn on **Enable external control** on either page and save. Settings are stored in the dashboard data directory and continue to apply across restarts, including if you later turn off the dashboard. Controller writes and a PIN are required for automatic control.
 
 The start and stop commands operate the entire boiler, including domestic hot water production.
 
@@ -69,9 +69,9 @@ The start and stop commands operate the entire boiler, including domestic hot wa
 
 Boiler Mate reads Home Assistant MQTT discovery on the same broker. It supports MQTT climate entities with an action topic and MQTT temperature sensors reporting °C, °F, or K. Plain payloads, simple JSON field templates, and Zigbee2MQTT's standard climate action mapping are supported. Retain discovery messages and current readings for use after a reconnect, and publish availability separately when the device supports it. Devices with unsupported discovery configurations show the reason on the page. [Home Assistant MQTT discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery) · [MQTT climate actions](https://www.home-assistant.io/integrations/climate.mqtt/#action_topic)
 
-The page also discovers thermostats directly from a Z-Wave JS UI gateway using named MQTT topics under the `zwave` prefix. It uses the thermostat's operating state and the node, driver, and gateway availability topics. [Z-Wave JS UI MQTT guide](https://github.com/zwave-js/zwave-js-ui/blob/master/docs/guide/mqtt.md)
+**Zones** also discovers thermostats directly from a Z-Wave JS UI gateway using named MQTT topics under the `zwave` prefix. It uses the thermostat's operating state and the node, driver, and gateway availability topics. [Z-Wave JS UI MQTT guide](https://github.com/zwave-js/zwave-js-ui/blob/master/docs/guide/mqtt.md)
 
-Room and outdoor readings are shown in the page's selected unit. For thermostats that omit the unit from their MQTT data, set `BOILER_MATE_MQTT_THERMOSTAT_UNIT` to `C` (default) or `F` to match the readings they publish. New installations also use that unit as the initial display preference.
+Room and outdoor readings use the units selected under **Outdoor Climate**. For thermostats that omit the unit from their MQTT data, set `BOILER_MATE_MQTT_THERMOSTAT_UNIT` to `C` (default) or `F` to match the readings they publish. New installations also use that unit as the initial display preference.
 
 **Overview** shows the temperature and current action for each configured thermostat. It uses the configured outdoor sensor when its reading is current and labels fresh controller weather as a fallback if the sensor is unavailable.
 
@@ -85,25 +85,25 @@ Use direct MQTT discovery for devices that already publish usable MQTT readings,
 | `BOILER_MATE_HA_TOKEN` | A Home Assistant access token supplied through the deployment's secret store |
 | `BOILER_MATE_HA_ENTITIES` | Comma-separated list of up to 32 `climate.*` or `sensor.*` entities that need Home Assistant, for example `sensor.circulator_media_temperature,sensor.circulator_flow` |
 
-Boiler Mate reads the listed states every 15 seconds. It uses each climate entity's reported HVAC action for heat demand and offers temperature sensors as outdoor sources under **External heating**. Keep MQTT devices out of the allowlist to give each physical device one source. The connection issues only read requests. The token inherits its Home Assistant account's permissions. [Home Assistant REST API](https://contributors.home-assistant.io/core/internals/rest-api/)
+Boiler Mate reads the listed states every 15 seconds. It uses each climate entity's reported HVAC action for heat demand and offers temperature sensors as outdoor sources under **Integration → Outdoor Climate**. Keep MQTT devices out of the allowlist to give each physical device one source. The connection issues only read requests. The token inherits its Home Assistant account's permissions. [Home Assistant REST API](https://contributors.home-assistant.io/core/internals/rest-api/)
 
-Under **External heating → Zone pumps**, assign a media-temperature sensor, a flow sensor, or both to the zone's thermostat. **View pump chart** opens the assigned readings alongside boiler temperature and power. Assignments are for monitoring and have no effect on heat-demand control. Boiler Mate records these sensor histories once per minute in °C and m³/h. Chart recording begins when Boiler Mate receives the readings.
+Under **Integration → Zones → Zone Pumps**, assign a media-temperature sensor, a flow sensor, or both to the zone's thermostat. **View pump chart** opens the assigned readings alongside boiler temperature and power. Assignments are for monitoring and have no effect on heat-demand control. Boiler Mate records these sensor histories once per minute in °C and m³/h. Chart recording begins when Boiler Mate receives the readings.
 
 The pump chart also shows when the linked thermostat was calling for heat. Boiler Mate keeps up to 30 days of demand history for assigned zones. The track shows an unknown period whenever the thermostat's action cannot be confirmed or demand history has yet to be recorded.
 
 ### Efficiency suggestions
 
-Open **Monitor → Efficiency** to see what Boiler Mate has observed over the last seven days. Select the thermostats you want it to follow under **External heating**. Automatic control can be off while suggestions are collected.
+Open **Monitor → Efficiency** to see what Boiler Mate has observed over the last seven days. Select the thermostats you want it to follow under **Integration → Zones**. Automatic control can be off while suggestions are collected.
 
 Boiler Mate looks for repeated short burns that reach the boiler’s temperature stop while the same loops still call, oscillation during steady firing with usable P and I readings, and repeated runs that stay below target at the controller’s maximum output. Suggestions show the calling loops, measured evidence, and what to check. Startup, hot-water priority, signal gaps, and changes in operating conditions can interrupt an observation. Suggestions are advisory and require no controller writes.
 
-Under **Efficiency → Weather & fuel**, Boiler Mate keeps two years of outdoor observations. It prefers the selected local sensor when the reading is current and otherwise uses the boiler’s remote weather feed. Reports integrate the degrees below an adjustable heating base over the observed hours. The default is 65 °F. Equivalent heating degree days are degree hours divided by 24. Check the source and coverage columns when comparing periods.
+Under **Efficiency → Weather & Fuel**, Boiler Mate keeps two years of outdoor observations. It prefers the selected local sensor when the reading is current and otherwise uses the boiler’s remote weather feed. Reports integrate the degrees below an adjustable heating base over the observed hours. The default is 65 °F. Equivalent heating degree days are degree hours divided by 24. Check the source and coverage columns when comparing periods.
 
 The fuel trend pairs weather with completed periods from the pellet ledger. Boiler Mate reports kilograms per equivalent degree day when weather coverage and the pellet counter support the comparison. Brand comparisons use periods attributed to one brand by the ledger. Pellet use can include domestic hot water, and the ledger estimates which purchase was consumed.
 
 ### Controller reads in the dashboard and MQTT
 
-Open **Charts → Controller history** for chart IDs stored by the boiler, **Events → Controller log** for its event log, **Live data → Selected readings** for a one-time group of operating values, or **System → Firmware versions / Wireless sensors** for controller lists. Firmware and hardware determine which reads succeed. Chart IDs have controller-specific meanings.
+Open **Charts → Controller History** for chart IDs stored by the boiler, **Events → Controller Log** for its event log, **Live Data → Selected Readings** for a one-time group of operating values, or **System → Firmware Versions / Wireless Sensors** for controller lists. Firmware and hardware determine which reads succeed. Chart IDs have controller-specific meanings.
 
 Subscribe to `<prefix>/controller/+` for retained JSON results. Each result includes `read_at`, the URL-encoded `query`, and `data` for a successful read or `error` for a failed read. To request a read, publish a non-retained message to `<prefix>/get/controller/<name>`. These reads work with controller writes disabled.
 

@@ -17,7 +17,7 @@ function pelletLedgerPage(token) {
   let request = 0;
   let entriesKey;
 
-  main.replaceChildren(heading('Pellet purchase ledger'),
+  main.replaceChildren(heading('Pellet Purchase Ledger'),
     renderSections('consumption',consumptionSections,'ledger','Consumption sections'),
     pageError,
     dom('div',{class:'stack'},
@@ -257,7 +257,7 @@ function pelletSupplyForm(save) {
     dom('div',{class:'pellet-inputs'},pelletField('Low-stock threshold',threshold),pelletField('Threshold unit',unit),
       pelletField('Currency code',currency)),
     dom('p',{class:'muted'},'Leave the threshold blank to turn off low-stock notices. Enable the pellet supply category for desktop delivery. ',
-      dom('a',{href:'#events/notifications'},'Desktop notifications')),
+      dom('a',{href:'#events/notifications'},'Desktop Notifications')),
     error,dom('div',{class:'pellet-actions'},submit));
   let dirty = false;
   let saving = false;

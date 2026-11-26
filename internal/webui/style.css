@@ -37,7 +37,7 @@
   .brand-icon { @apply size-8 shrink-0; }
   .sidebar nav { @apply hidden md:block; }
   .nav-group { @apply mb-4 grid gap-0.5; }
-  .nav-label { @apply px-2 pb-1 text-[0.70rem] font-semibold uppercase tracking-[0.08em] text-muted; }
+  .nav-label { @apply px-2 pb-1 text-[0.70rem] font-semibold tracking-[0.08em] text-muted; }
   .side-link {
     @apply block rounded-md px-2.5 py-[0.44rem] text-[0.875rem] font-medium leading-tight text-muted;
     @apply hover:bg-slate-100 hover:text-ink;

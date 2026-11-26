@@ -2,31 +2,31 @@
 
 const navigation = [
   ['Monitor', [
-    ['overview', 'Overview', '◈'], ['live-data', 'Live data', '◉'],
+    ['overview', 'Overview', '◈'], ['live-data', 'Live Data', '◉'],
     ['charts', 'Charts', '∿'], ['consumption', 'Consumption', '▥'],
     ['efficiency', 'Efficiency', '↗'],
     ['events', 'Events', '☷'],
   ]],
   ['Controller', [
-    ['boiler', 'Boiler', '▣'], ['fuel', 'Hopper & feed', '▧'], ['hot-water', 'DHW', '◉'],
+    ['boiler', 'Boiler', '▣'], ['fuel', 'Hopper & Feed', '▧'], ['hot-water', 'DHW', '◉'],
     ['weather', 'Weather', '☁'], ['solar', 'Solar', '☼'], ['system', 'System', '⚙'],
-    ['external-heating', 'External heating', '◉'],
   ]],
-  ['Resources', [['help', 'Help & information', 'ⓘ']]],
+  ['Integration', [['zones', 'Zones', '◉'], ['outdoor-climate', 'Outdoor Climate', '☁']]],
+  ['Resources', [['help', 'Help & Information', 'ⓘ']]],
 ];
 const groups = {
   boiler: ['Boiler', 'Temperature, heating schedule, and external thermostat.', [
-    ['boiler','Temperature & schedule','temperature-and-schedule'], ['regulation','Regulation'], ['oxygen','Oxygen'], ['cleaning','Cleaning'],
+    ['boiler','Temperature & Schedule','temperature-and-schedule'], ['regulation','Regulation'], ['oxygen','Oxygen'], ['cleaning','Cleaning'],
     ['fan','Fan'], ['ignition','Ignition'], ['pump','Pump'], ['alarm','Alarm'],
   ]],
-  fuel: ['Hopper & feed', 'Fuel level, pellet feed, and auger calibration.', [
-    ['hopper','Hopper'], ['auger','Augers & external feed'], ['vacuum','Vacuum transport'],
+  fuel: ['Hopper & Feed', 'Fuel level, pellet feed, and auger calibration.', [
+    ['hopper','Hopper'], ['auger','Augers & External Feed'], ['vacuum','Vacuum Transport'],
   ]],
-  'hot-water': ['DHW', 'Domestic hot water temperature, output, and weekly schedule.', [['hot_water','Temperature & schedule','temperature-and-schedule']]],
+  'hot-water': ['DHW', 'Domestic hot water temperature, output, and weekly schedule.', [['hot_water','Temperature & Schedule','temperature-and-schedule']]],
   weather: ['Weather', 'Outdoor readings and weather compensation for both heating circuits.', [
-    ['weather','Heating circuit 1','circuit-1'], ['weather2','Heating circuit 2','circuit-2'],
+    ['weather','Heating Circuit 1','circuit-1'], ['weather2','Heating Circuit 2','circuit-2'],
   ]],
-  solar: ['Solar', 'Solar collector, cylinder temperatures, and pump settings.', [['sun','Solar circuit','solar-circuit']]],
+  solar: ['Solar', 'Solar collector, cylinder temperatures, and pump settings.', [['sun','Solar Circuit','solar-circuit']]],
   system: ['System', 'Controller information and service settings.', [['misc','Controller','controller'], ['manual','Service','service']]],
 };
 const readingGroups = ['operating_data','advanced_data','home_assistant'];
@@ -35,7 +35,7 @@ const readingAliases = {
 };
 const combustionReadings = new Set(['oxygen','oxygen_ref','o2_setpoint','corr_low','corr_medium','corr_high','photo_level','smoke_temp']);
 const consumptionPeriods = [['hours','Hourly'],['days','Daily'],['months','Monthly'],['years','Yearly']];
-const consumptionSections = [...consumptionPeriods,['ledger','Purchase ledger']];
+const consumptionSections = [...consumptionPeriods,['ledger','Purchase Ledger']];
 const labels = {
   boiler_temp: ['Boiler temperature','°C'], boiler_ref: ['Boiler target temperature','°C'],
   smoke_temp: ['Chimney/smoke','°C'], return_temp: ['Boiler return','°C'], shaft_temp: ['Drop shaft','°C'],
@@ -387,7 +387,8 @@ function renderOverviewHeating(target,heating) {
       dom('h3',{},zone.name), reading(zone.temperature),
       dom('span',{class:'overview-zone-action'},dom('span',{class:'indicator','aria-hidden':'true'}),action));
   });
-  const link=dom('a',{class:'home-link',href:'#external-heating'},'Manage heating');
+  const link=thermostats.length ? dom('a',{class:'home-link',href:'#zones'},'Manage Zones') :
+    dom('a',{class:'home-link',href:'#outdoor-climate'},'Manage Outdoor Climate');
   const restoreFocus=target.contains(document.activeElement);
   target.replaceChildren(
     dom('header',{class:'overview-zones-header'},
@@ -470,7 +471,7 @@ function overview(token) {
   const metricsPanel = dom('div',{},empty('Waiting for telemetry…'));
   const customise = dom('details',{},dom('summary',{},'Choose overview readings'),metricsPanel,
     btn('Reset to default',()=>setMetrics(null),'secondary mt-2'));
-  main.replaceChildren(heading('Pellet boiler'),
+  main.replaceChildren(heading('Pellet Boiler'),
     dom('div',{class:'stack'},live,heating,
       card('Combustion',null,dom('div',{class:'combustion-grid',id:'overview-combustion'})),
       dom('div',{class:'grid split'},
@@ -1099,7 +1100,7 @@ function desktopNotifications(open) {
         inputs.disabled=false;
       }
     }}),label)));
-  const panel=dom('details',{open},dom('summary',{},'Desktop notifications'),description,inputs,desktop);
+  const panel=dom('details',{open},dom('summary',{},'Desktop Notifications'),description,inputs,desktop);
   const prepare=async()=>{
     if(!supportsPush||setup)return;
     try {
@@ -1260,7 +1261,7 @@ function updateReadings() {
 function readingsPage() {
   const filter=dom('input',{id:'readings-filter',type:'search',class:'field-input lookup',
     'aria-label':'Filter readings',placeholder:'Filter readings',oninput:updateReadings});
-  main.replaceChildren(heading('Live data'),controllerTabs('live-data','all'),dom('section',{class:'card'},
+  main.replaceChildren(heading('Live Data'),controllerTabs('live-data','all'),dom('section',{class:'card'},
     dom('div',{class:'toolbar'},filter,dom('span',{id:'reading-time'})),dom('div',{id:'reading-table'})));
   updateReadings();
 }
@@ -1307,7 +1308,7 @@ function settingsPage(id,group,token) {
       catch(error){toast(error.message);}
     },'danger',{disabled:!editEnabled()}),
     id==='boiler'&&dom('a',{class:'primary',href:'#overview'},'Boiler controls'),
-    id==='fuel'&&dom('a',{class:'secondary',href:'#consumption/ledger'},'Pellet purchase ledger'),
+    id==='fuel'&&dom('a',{class:'secondary',href:'#consumption/ledger'},'Pellet Purchase Ledger'),
     btn('Refresh readings',async()=>{await refresh();renderPage();}));
   main.replaceChildren(heading(title,description,actions),
     dom('div',{class:'stack'},
@@ -1397,7 +1398,7 @@ function timerEditor(group,fields,canEdit,reload) {
 
 function efficiencyPage(token) {
   const content=dom('div',{class:'stack','aria-live':'polite'},empty('Loading observations…'));
-  main.replaceChildren(heading('Efficiency suggestions',
+  main.replaceChildren(heading('Efficiency Suggestions',
     'Review repeated patterns in burner runs, thermostat demand, and temperature regulation.'),
     renderSections('efficiency',efficiencySections,'suggestions','Efficiency views'),content);
   let lastRequest=0;
@@ -1430,7 +1431,7 @@ function efficiencyPage(token) {
         [card('Watching for repeat patterns',null,empty(observed>0 ?
           'Boiler Mate needs repeat observations under similar conditions before suggesting a change.' :
           'Boiler Mate needs a firing run and known heat demand from your selected thermostats.'),
-        observed===0 && dom('a',{class:'home-link',href:'#external-heating'},'View thermostat signals'))];
+        observed===0 && dom('a',{class:'home-link',href:'#zones'},'View thermostat signals'))];
       content.replaceChildren(stats, ...results,
         dom('p',{class:'muted'},'Suggestions are advisory. Boiler Mate uses comparable space-heating observations and leaves controller settings to you.'));
     } catch (error) {
@@ -1451,7 +1452,7 @@ function helpPage() {
     ['How can I change the dashboard?','Open Choose overview readings on Overview to select additional readings. Choose signals and periods independently on Charts. Selections are stored in this browser.'],
     ['Where do I find help for a setting?','Open Help below a setting for its purpose and controller-reported range. Consult the manual for firmware-specific wiring and service procedures.'],
   ];
-  main.replaceChildren(heading('Help & information','Operation, history, and troubleshooting for this Boiler Mate instance.'),
+  main.replaceChildren(heading('Help & Information','Operation, history, and troubleshooting for this Boiler Mate instance.'),
     dom('div',{class:'grid split'},
       card('Using Boiler Mate',null,faqs.map(([title,body])=>dom('details',{},dom('summary',{},title),dom('p',{},body)))),
       card('Manufacturer resources',null,
@@ -1467,9 +1468,9 @@ function renderPage() {
   chartRenderers.clear();
   const [hashPath,parameters]=window.location.hash.slice(1).split('?');
   const [hashPage,requestedSection]=hashPath.split('/');
-  const requested=({ 'advanced-data':'live-data', messages:'events', notifications:'events' })[hashPage]??hashPage;
+  const requested=({ 'advanced-data':'live-data', messages:'events', notifications:'events', 'external-heating':'zones' })[hashPage]??hashPage;
   page=navigation.flatMap(([,items])=>items).some(([id])=>id===requested)?requested:'overview';
-  const sections=groups[page]?.[2] ?? (page==='consumption'?consumptionSections:[]);
+  const sections=groups[page]?.[2] ?? (page==='consumption'?consumptionSections:page==='efficiency'?efficiencySections:[]);
   const [section,sectionLabel]=sections.find(([id,,slug=id])=>slug===requestedSection) ?? sections[0] ?? [];
   const token=++generation;
   const readSection=controllerSections[page]?.slice(1).find(([kind])=>kind===requestedSection);
@@ -1490,7 +1491,7 @@ function renderPage() {
   else if (page==='efficiency' && requestedSection==='weather') degreeWeatherPage(token);
   else if (page==='efficiency') efficiencyPage(token);
   else if (page==='events') activity(token,hashPage==='messages'?'notices':'',hashPage==='notifications'||requestedSection==='notifications');
-  else if (page==='external-heating') externalHeatingPage(token);
+  else if (page==='zones'||page==='outdoor-climate') externalHeatingPage(page,token);
   else helpPage();
 }
 

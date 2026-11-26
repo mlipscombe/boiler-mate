@@ -285,6 +285,7 @@ func (ui *UI) Handler() http.Handler {
 	router.HandleFunc("POST /api/alarm/reset", ui.resetAlarm)
 	router.HandleFunc("GET /api/external-heating", ui.getExternalHeating)
 	router.HandleFunc("PUT /api/external-heating", ui.putExternalHeating)
+	router.HandleFunc("PATCH /api/external-heating", ui.patchExternalHeating)
 	router.HandleFunc("POST /api/external-heating/resume", ui.resumeExternalHeating)
 	router.HandleFunc("GET /api/external-heating/pumps", ui.getZonePumps)
 	router.HandleFunc("PUT /api/external-heating/pumps", ui.putZonePump)

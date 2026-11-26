@@ -1,10 +1,10 @@
 'use strict';
 
 const controllerSections = {
-  charts: [['recorded','Boiler Mate history'],['chart','Controller history']],
-  events: [['activity','Boiler Mate events'],['events','Controller log']],
-  'live-data': [['all','All readings'],['values','Selected readings']],
-  system: [['controller','Controller settings'],['versions','Firmware versions'],['sensors','Wireless sensors']],
+  charts: [['recorded','Boiler Mate History'],['chart','Controller History']],
+  events: [['activity','Boiler Mate Events'],['events','Controller Log']],
+  'live-data': [['all','All Readings'],['values','Selected Readings']],
+  system: [['controller','Controller Settings'],['versions','Firmware Versions'],['sensors','Wireless Sensors']],
 };
 
 function controllerTabs(pageID, section) {
@@ -25,8 +25,8 @@ function localDateInput(date) {
 }
 
 function controllerReadPage(pageID, kind, token) {
-  const titles = {versions:'Firmware versions',sensors:'Wireless room sensors',events:'Controller event log',
-    chart:'Controller chart history',values:'Selected operating readings'};
+  const titles = {versions:'Firmware Versions',sensors:'Wireless Room Sensors',events:'Controller Event Log',
+    chart:'Controller Chart History',values:'Selected Operating Readings'};
   const descriptions = {versions:'Versions offered by this controller.',events:'Read the boiler’s own log around a chosen time.',
     sensors:'Read the wireless room sensors paired with this controller.',
     values:'Choose the operating values to read together from the controller.',

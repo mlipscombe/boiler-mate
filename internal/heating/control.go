@@ -132,17 +132,26 @@ func (c *Control) Watch(setTopics func([]string)) {
 }
 
 func (c *Control) Set(settings Settings) error {
+	return c.UpdateSettings(func(Settings) (Settings, error) { return settings, nil })
+}
+
+// UpdateSettings applies an edit to the latest settings while serializing it with other writes.
+func (c *Control) UpdateSettings(edit func(Settings) (Settings, error)) error {
+	c.operation.Lock()
+	defer c.operation.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	previous := c.Settings
+	settings, err := edit(previous)
+	if err != nil {
+		return err
+	}
 	if err := settings.validate(); err != nil {
 		return err
 	}
 	if settings.Enabled && c.write == nil {
 		return ErrReadOnly
 	}
-	c.operation.Lock()
-	defer c.operation.Unlock()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	previous := c.Settings
 	next := c.savedState
 	next.Settings = settings
 	if !sameOutdoor(previous, settings) || settings.StopAt == nil || !settings.Enabled {
